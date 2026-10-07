@@ -3,7 +3,8 @@
 # Configure API Key
 $env:GEMINI_API_KEY = "AQ.Ab8RN6IsDMpD9Zt-EQ2Er4Yc6Df8_4d-dt7WjyCVJDvjjCRi9g"
 
-$AiderModel = "gemini/gemini-2.5-pro"
+# Use the free-tier Gemini 2.5 Flash model
+$AiderModel = "gemini/gemini-2.5-flash"
 $AiderFlags = @(
     "--model", $AiderModel,
     "--yes-always",
@@ -31,7 +32,7 @@ foreach ($task in $tasks) {
     Write-Host "Pushing progress to GitHub (main)..." -ForegroundColor Yellow
     git push -u origin main
 
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 3
 }
 
 Write-Host "`n=== All tasks finished at $(Get-Date) ===" -ForegroundColor Green
