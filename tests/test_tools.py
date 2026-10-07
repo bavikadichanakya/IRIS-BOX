@@ -110,7 +110,7 @@ class TestHomeAssistantTool(unittest.TestCase):
         action_payload = SmartHomeAction(
             entity_id="light.bedroom",
             domain="light",
-            action="turn_on",
+            action="on", # Changed from "turn_on"
             attributes={"brightness": 255}
         )
         result = self.tool.execute(action_payload)
@@ -138,7 +138,7 @@ class TestHomeAssistantTool(unittest.TestCase):
         action_payload = SmartHomeAction(
             entity_id="light.bedroom",
             domain="light",
-            action="turn_on"
+            action="on" # Changed from "turn_on"
         )
         result = self.tool.execute(action_payload)
 
@@ -156,7 +156,7 @@ class TestHomeAssistantTool(unittest.TestCase):
         action_payload = SmartHomeAction(
             entity_id="light.bedroom",
             domain="light",
-            action="turn_on"
+            action="on" # Changed from "turn_on"
         )
         result = self.tool.execute(action_payload)
 
@@ -172,7 +172,7 @@ class TestHomeAssistantTool(unittest.TestCase):
         action_payload = SmartHomeAction(
             entity_id="light.bedroom",
             domain="light",
-            action="turn_on"
+            action="on" # Changed from "turn_on"
         )
         result = self.mock_tool.execute(action_payload)
 

@@ -122,7 +122,7 @@ class SystemCommandTool(BaseTool):
     Safe local command executor with a whitelist of allowed commands.
     """
     _ALLOWED_COMMANDS = {
-        "dir", "ls", "echo", "pwd", "cd",
+        "dir", "ls", "echo", "pwd", "cd", "sleep",
         "whoami", "hostname", "ipconfig", "ifconfig", "ping",
     }
 
