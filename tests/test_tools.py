@@ -120,7 +120,7 @@ class TestHomeAssistantTool(unittest.TestCase):
         self.assertEqual(result.output_payload, {"message": "Service executed"})
         self.assertIsNone(result.error)
 
-        expected_url = f"{self.ha_url}/api/services/light/turn_on"
+        expected_url = f"{self.ha_url}/api/services/light/on"
         expected_headers = {
             "Authorization": f"Bearer {self.ha_token}",
             "Content-Type": "application/json",
