@@ -2,7 +2,7 @@
 
 if (-not $env:GEMINI_API_KEY) {
     Write-Host "ERROR: Please set your GEMINI_API_KEY first!" -ForegroundColor Red
-    Write-Host "Run: `$env:GEMINI_API_KEY='your_api_key_here'" -ForegroundColor Yellow
+    Write-Host "Run: `$env:GEMINI_API_KEY='your_actual_key'" -ForegroundColor Yellow
     exit 1
 }
 
@@ -19,18 +19,27 @@ Write-Host "=== Starting Overnight Aider Pipeline at $(Get-Date) ===" -Foregroun
 
 $tasks = Get-ChildItem -Path "tasks\*.md" | Sort-Object Name
 
-foreach ($task in$tasks) {
+foreach ($task in $tasks) {
     Write-Host "`n==========================================================" -ForegroundColor Cyan
-    Write-Host "Executing: $($task.Name) at $(Get-Date)" -ForegroundColor Cyan
+    Write-Host "Executing: $($task.Name) at$(Get-Date)" -ForegroundColor Cyan
     Write-Host "==========================================================" -ForegroundColor Cyan
 
+    # Run Aider
     uvx --python 3.12 --from aider-chat aider.exe @AiderFlags --message-file $task.FullName
 
     $lastCommit = git log -1 --oneline
-    Write-Host "Completed $($task.Name) -> $lastCommit" -ForegroundColor Green
-    Start-Sleep -Seconds 3
+    Write-Host "Completed $($task.Name) ->$lastCommit" -ForegroundColor Green
+
+    # Automatically push incremental progress to GitHub
+    Write-Host "Pushing progress to GitHub (main)..." -ForegroundColor Yellow
+    git push -u origin main
+    
+    Start-Sleep -Seconds 5
 }
 
 Write-Host "`n=== All tasks finished at $(Get-Date) ===" -ForegroundColor Green
-Write-Host "Final Git Log:" -ForegroundColor Yellow
+Write-Host "Final push to GitHub..." -ForegroundColor Yellow
+git push -u origin main
+
+Write-Host "`nFinal Git Log:" -ForegroundColor Yellow
 git log --oneline -n 10
