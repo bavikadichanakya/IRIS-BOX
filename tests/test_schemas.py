@@ -168,7 +168,7 @@ def test_agent_execution_result_validation_errors():
     # Invalid success type
     with pytest.raises(ValidationError):
         AgentExecutionResult(
-            success="yes",
+            success=123,
             tool_name="tool",
             output_payload={},
             error="message",
