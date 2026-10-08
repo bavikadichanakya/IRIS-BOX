@@ -78,6 +78,8 @@ class TTSEngine:
         # -----------------------------------------------------------------
         # 2️⃣ Try the online Edge‑TTS path.
         # -----------------------------------------------------------------
+        if edge_tts is None:
+            raise RuntimeError("edge-tts is not available")
         if edge_tts is not None:
             try:
                 communicate = edge_tts.Communicate(
@@ -165,3 +167,13 @@ class TTSEngine:
             wf.writeframes(silent_frame * num_frames)
 
         return buffer.getvalue()
+
+def _generate_silent_audio(duration_sec: float = 1.0, sample_rate: int = 16000) -> bytes:
+    import io, wave
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\x00\x00" * int(sample_rate * duration_sec))
+    return buffer.getvalue()
