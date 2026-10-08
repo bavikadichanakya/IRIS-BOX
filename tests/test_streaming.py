@@ -2,8 +2,10 @@ import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock
 
+from pydantic import BaseModel
+
 from src.agent.orchestrator import IRISOrchestrator
-from src.models.schemas import StreamChunkPayload
+from src.models.schemas import StreamChunkPayload, AgentExecutionResult
 from src.tools.registry import ToolRegistry, BaseTool
 
 
