@@ -67,9 +67,20 @@ class HomeAssistantTool(BaseTool):
     Dispatches local REST requests to Home Assistant with token auth.
     Includes mock mode for testing without a live HA instance.
     """
-    def __init__(self, ha_url: str = "", ha_token: str = "", mock_mode: bool = False):
+    def __init__(self, ha_url: str = "", ha_token: str = "", mock_mode: bool = None):
+        if mock_mode is None:
+            # Auto-detect: default to True if HA_URL or HA_TOKEN env vars are missing/empty
+            env_ha_url = os.environ.get("HA_URL", "")
+            env_ha_token = os.environ.get("HA_TOKEN", "")
+            if not ha_url:
+                ha_url = env_ha_url
+            if not ha_token:
+                ha_token = env_ha_token
+            mock_mode = not (ha_url and ha_token)
+        
         if not mock_mode and (not ha_url or not ha_token):
             raise ValueError("HA URL and token must be provided unless in mock mode.")
+        
         self.ha_url = ha_url
         self.ha_token = ha_token
         self.mock_mode = mock_mode
