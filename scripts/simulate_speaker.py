@@ -1,52 +1,62 @@
-"""Simulated audio speaker for Iris backend WebSocket."""
+﻿"""Simulated speaker client for IRIS WebSocket."""
 import asyncio
-import io
+import base64
+import json
 import logging
-import sounddevice as sd
+import sys
+
 import websockets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("simulate_speaker")
 
-WS_URL = "ws://localhost:8000/ws/audio"
-LIVE_FLAG = "--live"
-
-def make_chunk(ms=500, rate=16000):
-    buf = io.BytesIO()
-    with wave.open(buf, 'wb') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(rate)
-        wf.writeframes(b'\x00\x00' * int(rate * (ms / 1000.0)))
-    return buf.getvalue()
+WS_URL = "ws://localhost:8000/ws/stream"
 
 async def simulate():
+    prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Say hello and introduce yourself"
     logger.info(f"Connecting to {WS_URL}...")
+
     try:
         async with websockets.connect(WS_URL) as ws:
-            logger.info("Connected. Streaming audio frames...")
-            if "--live" in sys.argv:
-                logger.info("Live mode enabled. Capturing audio from microphone...")
-                stream = sd.InputStream(samplerate=16000, channels=1)
-                async for frame in stream:
-                    await ws.send(frame)
-                    logger.info("Sent frame")
-                stream.stop()
-                logger.info("Microphone capture stopped.")
-            else:
-                logger.info("Synthetic sine-wave/silent mode enabled.")
-                for i in range(3):
-                    await ws.send(make_chunk())
-                    logger.info(f"Sent chunk {i+1}/3")
-                    await asyncio.sleep(0.3)
-            logger.info("Stream completed. Awaiting acknowledgement...")
-            try:
-                res = await asyncio.wait_for(ws.recv(), timeout=4.0)
-                logger.info(f"Received: {res}")
-            except asyncio.TimeoutError:
-                logger.info("Completed wait cycle.")
+            logger.info(f"Sending prompt: '{prompt}'")
+            await ws.send(json.dumps({
+                "prompt": prompt,
+                "return_audio": True
+            }))
+
+            print("\n--- Iris Response ---")
+            audio_buffer = bytearray()
+
+            while True:
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                    data = json.loads(msg)
+                    chunk_type = data.get("chunk_type")
+
+                    if chunk_type == "text_delta":
+                        print(data.get("delta_text", ""), end="", flush=True)
+                    elif chunk_type == "complete":
+                        print("\n\n[Text Generation Completed]")
+                    elif chunk_type == "audio_start":
+                        print("[Generating & Receiving Audio Stream...]")
+                    elif chunk_type == "audio_chunk":
+                        raw_bytes = base64.b64decode(data.get("data", ""))
+                        audio_buffer.extend(raw_bytes)
+                    elif chunk_type == "audio_end":
+                        output_path = "iris_response.mp3"
+                        with open(output_path, "wb") as f:
+                            f.write(audio_buffer)
+                        print(f"[Audio Stream Received: {len(audio_buffer)} bytes -> saved to {output_path}]")
+                        break
+                    elif "error" in data:
+                        print(f"\n[Server Error]: {data['error']}")
+                        break
+                except asyncio.TimeoutError:
+                    print("\n[Stream finished/timed out]")
+                    break
+
     except Exception as e:
-        logger.warning(f"Speaker simulation note: {e}")
+        logger.error(f"Speaker simulation failed: {e}")
 
 if __name__ == '__main__':
     asyncio.run(simulate())

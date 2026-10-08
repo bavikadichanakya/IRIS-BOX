@@ -10,6 +10,7 @@ load_dotenv()
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from src.models.schemas import VoiceCommandPayload, AgentExecutionResult
 from src.agent.orchestrator import IRISOrchestrator
+from src.audio.tts import TTSEngine
 from src.server.fleet import FleetManager, router as fleet_router
 
 logger = logging.getLogger("iris")
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
     
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model)
     app.state.orchestrator = orchestrator
+    app.state.tts_engine = TTSEngine()
     app.state.fleet_manager = FleetManager()
     
     yield
@@ -114,9 +116,30 @@ async def websocket_stream(websocket: WebSocket):
                 continue
 
             try:
+                full_text = []
                 async for chunk in orchestrator_instance.stream_request(user_prompt):
                     await websocket.send_json(chunk.model_dump())
+                    if hasattr(chunk, 'delta_text') and chunk.delta_text and chunk.chunk_type == 'text_delta':
+                        full_text.append(chunk.delta_text)
+
+                # If audio was requested or return_audio is true/default
+                if payload_dict.get('return_audio', True):
+                    complete_message = ''.join(full_text).strip()
+                    tts_engine = getattr(websocket.app.state, 'tts_engine', None)
+                    if tts_engine and complete_message:
+                        await websocket.send_json({'chunk_type': 'audio_start'})
+                        async for audio_chunk in tts_engine.stream_audio(complete_message):
+                            import base64
+                            b64 = base64.b64encode(audio_chunk).decode('utf-8')
+                            await websocket.send_json({'chunk_type': 'audio_chunk', 'data': b64})
+                        await websocket.send_json({'chunk_type': 'audio_end'})
+            except WebSocketDisconnect:
+                break
             except Exception as err:
-                await websocket.send_json({"error": f"Streaming failed: {err}"})
+                logger.error(f"Streaming error: {err}")
+                try:
+                    await websocket.send_json({"error": f"Streaming failed: {err}"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
         pass
