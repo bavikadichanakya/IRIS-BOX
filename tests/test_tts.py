@@ -6,16 +6,22 @@ import pytest
 from src.audio.tts import TTSEngine
 
 
+def _make_async_gen(items):
+    """Helper to create an async generator from a list of items."""
+    async def gen():
+        for item in items:
+            yield item
+    return gen
+
+
 class TestTTSEngine:
     """Unit tests for the TTSEngine class."""
 
     def test_stream_audio_yields_chunks(self):
         """Test that stream_audio yields audio chunks from edge-tts."""
         async def _test():
-            mock_communicate = AsyncMock()
-            mock_communicate.stream = AsyncMock(
-                return_value=iter([b"chunk1", b"chunk2", b"chunk3"])
-            )
+            mock_communicate = MagicMock()
+            mock_communicate.stream = _make_async_gen([b"chunk1", b"chunk2", b"chunk3"])
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
@@ -34,10 +40,8 @@ class TestTTSEngine:
     def test_stream_audio_caching(self):
         """Test that common phrases are cached and reused."""
         async def _test():
-            mock_communicate = AsyncMock()
-            mock_communicate.stream = AsyncMock(
-                return_value=iter([b"cached_audio"])
-            )
+            mock_communicate = MagicMock()
+            mock_communicate.stream = _make_async_gen([b"cached_audio"])
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
@@ -57,8 +61,8 @@ class TestTTSEngine:
     def test_stream_audio_custom_voice(self):
         """Test that a custom voice is passed to edge-tts."""
         async def _test():
-            mock_communicate = AsyncMock()
-            mock_communicate.stream = AsyncMock(return_value=iter([b"data"]))
+            mock_communicate = MagicMock()
+            mock_communicate.stream = _make_async_gen([b"data"])
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
@@ -75,8 +79,8 @@ class TestTTSEngine:
     def test_stream_audio_pitch_rate_modulation(self):
         """Test that pitch and rate are forwarded to edge-tts."""
         async def _test():
-            mock_communicate = AsyncMock()
-            mock_communicate.stream = AsyncMock(return_value=iter([b"mod"]))
+            mock_communicate = MagicMock()
+            mock_communicate.stream = _make_async_gen([b"mod"])
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
@@ -93,10 +97,8 @@ class TestTTSEngine:
     def test_speak_returns_aggregate_bytes(self):
         """Test that speak() returns all audio data concatenated."""
         async def _test():
-            mock_communicate = AsyncMock()
-            mock_communicate.stream = AsyncMock(
-                return_value=iter([b"part1", b"part2"])
-            )
+            mock_communicate = MagicMock()
+            mock_communicate.stream = _make_async_gen([b"part1", b"part2"])
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
@@ -121,8 +123,8 @@ class TestTTSEngine:
     def test_cache_disabled(self):
         """Test that caching does not occur when disabled."""
         async def _test():
-            mock_communicate = AsyncMock()
-            mock_communicate.stream = AsyncMock(return_value=iter([b"data"]))
+            mock_communicate = MagicMock()
+            mock_communicate.stream = _make_async_gen([b"data"])
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
