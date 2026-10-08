@@ -83,7 +83,7 @@ def test_stream_request_tool_call():
         pass
 
     class DummyTool(BaseTool):
-        def execute(self, payload):
+        def execute(self, payload: DummyPayload):
             return AgentExecutionResult(
                 success=True,
                 tool_name="DummyTool",

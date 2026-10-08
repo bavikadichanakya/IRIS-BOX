@@ -1,10 +1,12 @@
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+from pydantic import BaseModel
 
 from src.agent.orchestrator import IRISOrchestrator, SessionMemory
 from src.models.schemas import AgentExecutionResult
+from src.tools.registry import BaseTool, ToolRegistry
 
 
 class FakeMessage:
@@ -21,6 +23,17 @@ class FakeChoice:
 class FakeResponse:
     def __init__(self, message):
         self.choices = [FakeChoice(message)]
+
+
+class FakeFunction:
+    def __init__(self, name=None, arguments=None):
+        self.name = name
+        self.arguments = arguments
+
+
+class FakeToolCall:
+    def __init__(self, function):
+        self.function = function
 
 
 @pytest.fixture
@@ -45,10 +58,29 @@ def test_session_memory_sliding_window():
 
 
 def test_process_request_retains_context(orchestrator):
-    # Mock the OpenAI client
+    # Register a dummy tool with annotated payload
+    class DummyPayload(BaseModel):
+        pass
+
+    class DummyTool(BaseTool):
+        def execute(self, payload: DummyPayload):
+            return AgentExecutionResult(
+                success=True,
+                tool_name="DummyTool",
+                output_payload={"result": "ok"}
+            )
+
+    ToolRegistry._tool_classes.clear()
+    ToolRegistry.register_tool("DummyTool")(DummyTool)
+
     with patch.object(orchestrator.client.chat.completions, 'create') as mock_create:
-        # First call returns a simple assistant message
-        first_message = FakeMessage(content="Hello there")
+        # First call returns a tool call for DummyTool
+        first_message = FakeMessage(
+            content="",
+            tool_calls=[
+                FakeToolCall(FakeFunction(name="DummyTool", arguments="{}"))
+            ]
+        )
         first_response = FakeResponse(first_message)
         mock_create.return_value = first_response
 
@@ -56,7 +88,12 @@ def test_process_request_retains_context(orchestrator):
         assert result1.success
 
         # Second call – we expect the messages to include the previous user and assistant turns
-        second_message = FakeMessage(content="You asked: Hi")
+        second_message = FakeMessage(
+            content="",
+            tool_calls=[
+                FakeToolCall(FakeFunction(name="DummyTool", arguments="{}"))
+            ]
+        )
         second_response = FakeResponse(second_message)
         mock_create.return_value = second_response
 
@@ -68,16 +105,19 @@ def test_process_request_retains_context(orchestrator):
         messages = kwargs.get("messages", [])
         # The system prompt is first, then history, then new user message
         assert any(m["role"] == "user" and m["content"] == "Hi" for m in messages)
-        assert any(m["role"] == "assistant" and m["content"] == "Hello there" for m in messages)
+        assert any(m["role"] == "assistant" and m["content"] == "" for m in messages)
+        # The assistant message should have tool_calls
+        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) > 0
+        assert "tool_calls" in assistant_msgs[0]
         assert messages[-1]["role"] == "user" and messages[-1]["content"] == "What did I just say?"
 
 
 def test_stream_request_retains_context(orchestrator):
     import asyncio
-    from src.models.schemas import StreamChunkPayload
 
     async def fake_stream():
-        # Yield a couple of text deltas then a tool call
+        # Yield a couple of text deltas
         chunk1 = MagicMock()
         chunk1.choices = [MagicMock()]
         chunk1.choices[0].delta.content = "Hello"
@@ -90,8 +130,12 @@ def test_stream_request_retains_context(orchestrator):
         yield chunk2
 
     async def run_test():
-        with patch.object(orchestrator.client.chat.completions, 'create', new_callable=patch.AsyncMock) as mock_create:
+        with patch('openai.AsyncOpenAI') as mock_async:
+            mock_instance = mock_async.return_value
+            mock_create = AsyncMock()
             mock_create.return_value = fake_stream()
+            mock_instance.chat.completions.create = mock_create
+
             # First streaming call
             chunks1 = []
             async for chunk in orchestrator.stream_request("Hello", session_id="stream_session"):
