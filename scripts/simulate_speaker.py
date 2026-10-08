@@ -2,13 +2,14 @@
 import asyncio
 import io
 import logging
-import wave
+import sounddevice as sd
 import websockets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("simulate_speaker")
 
 WS_URL = "ws://localhost:8000/ws/audio"
+LIVE_FLAG = "--live"
 
 def make_chunk(ms=500, rate=16000):
     buf = io.BytesIO()
@@ -24,10 +25,20 @@ async def simulate():
     try:
         async with websockets.connect(WS_URL) as ws:
             logger.info("Connected. Streaming audio frames...")
-            for i in range(3):
-                await ws.send(make_chunk())
-                logger.info(f"Sent chunk {i+1}/3")
-                await asyncio.sleep(0.3)
+            if "--live" in sys.argv:
+                logger.info("Live mode enabled. Capturing audio from microphone...")
+                stream = sd.InputStream(samplerate=16000, channels=1)
+                async for frame in stream:
+                    await ws.send(frame)
+                    logger.info("Sent frame")
+                stream.stop()
+                logger.info("Microphone capture stopped.")
+            else:
+                logger.info("Synthetic sine-wave/silent mode enabled.")
+                for i in range(3):
+                    await ws.send(make_chunk())
+                    logger.info(f"Sent chunk {i+1}/3")
+                    await asyncio.sleep(0.3)
             logger.info("Stream completed. Awaiting acknowledgement...")
             try:
                 res = await asyncio.wait_for(ws.recv(), timeout=4.0)

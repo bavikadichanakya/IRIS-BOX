@@ -1,4 +1,8 @@
 import logging
+import os
+import subprocess
+import wave
+import websockets
 from typing import AsyncGenerator, Dict, Optional
 
 try:
@@ -7,7 +11,6 @@ except ImportError:  # pragma: no cover
     edge_tts = None
 
 logger = logging.getLogger(__name__)
-
 
 class TTSEngine:
     """
@@ -106,14 +109,70 @@ class TTSEngine:
                 # Continue to offline fallback.
 
         # -----------------------------------------------------------------
-        # 3️⃣ Offline fallback – return a short silent audio placeholder.
+        # 3️⃣ Offline fallback – use local Piper TTS if available.
         # -----------------------------------------------------------------
-        silent_audio = self._generate_silent_placeholder()
-        # Cache the silent placeholder if caching is enabled – it is cheap.
-        if self.cache_common_phrases:
-            self._cache[text] = silent_audio
-        # Yield the placeholder in a single chunk to keep the async contract.
-        yield silent_audio
+        if not self._use_piper():
+            logger.info("Piper not found; falling back to offline silent audio.")
+            silent_audio = self._generate_silent_placeholder()
+            if self.cache_common_phrases:
+                self._cache[text] = silent_audio
+            yield silent_audio
+            return
+
+        # -----------------------------------------------------------------
+        # 4️⃣ Offline fallback – use local Piper TTS.
+        # -----------------------------------------------------------------
+        piper_path = self._get_piper_path()
+        if not os.path.exists(piper_path):
+            logger.warning("Piper binary not found; falling back to offline silent audio.")
+            silent_audio = self._generate_silent_placeholder()
+            if self.cache_common_phrases:
+                self._cache[text] = silent_audio
+            yield silent_audio
+            return
+
+        # -----------------------------------------------------------------
+        # 5️⃣ Offline fallback – use local ONNX voice model.
+        # -----------------------------------------------------------------
+        model_path = self._get_model_path()
+        if not os.path.exists(model_path):
+            logger.warning("ONNX model not found; falling back to offline silent audio.")
+            silent_audio = self._generate_silent_placeholder()
+            if self.cache_common_phrases:
+                self._cache[text] = silent_audio
+            yield silent_audio
+            return
+
+        # -----------------------------------------------------------------
+        # 6️⃣ Offline fallback – use local Piper TTS with ONNX model.
+        # -----------------------------------------------------------------
+        command = [
+            piper_path,
+            "--model",
+            model_path,
+            "--text",
+            text,
+            "--voice",
+            voice,
+            "--rate",
+            self.rate,
+            "--pitch",
+            self.pitch,
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            audio_data = result.stdout.encode("utf-8")
+            yield audio_data
+            if self.cache_common_phrases:
+                self._cache[text] = audio_data
+        except subprocess.CalledProcessError as exc:
+            logger.warning(
+                "Piper failed (%s). Falling back to offline silent audio.", exc
+            )
+            silent_audio = self._generate_silent_placeholder()
+            if self.cache_common_phrases:
+                self._cache[text] = silent_audio
+            yield silent_audio
 
     async def speak(self, text: str, voice: Optional[str] = None) -> bytes:
         """
@@ -167,6 +226,18 @@ class TTSEngine:
             wf.writeframes(silent_frame * num_frames)
 
         return buffer.getvalue()
+
+    def _use_piper(self) -> bool:
+        """Check if Piper is available."""
+        return os.path.exists("/usr/local/bin/piper")
+
+    def _get_piper_path(self) -> str:
+        """Get the path to the Piper binary."""
+        return "/usr/local/bin/piper"
+
+    def _get_model_path(self) -> str:
+        """Get the path to the ONNX model."""
+        return "/path/to/en_US-lessac-medium.onnx"
 
 def _generate_silent_audio(duration_sec: float = 1.0, sample_rate: int = 16000) -> bytes:
     import io, wave

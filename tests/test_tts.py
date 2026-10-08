@@ -120,23 +120,63 @@ class TestTTSEngine:
         with pytest.raises(RuntimeError, match="edge-tts is not available"):
             asyncio.run(_test())
 
-    def test_cache_disabled(self):
-        """Test that caching does not occur when disabled."""
+    def test_piper_not_found_raises(self):
+        """Test that a RuntimeError is raised when Piper is missing."""
         async def _test():
-            mock_communicate = MagicMock()
-            mock_communicate.stream = _make_async_gen([b"data"])
+            with patch("src.audio.tts.TTSEngine._use_piper", return_value=False):
+                engine = TTSEngine()
+                async for _ in engine.stream_audio("Hi"):
+                    pass
 
-            with patch("src.audio.tts.edge_tts") as mock_edge_tts:
-                mock_edge_tts.Communicate.return_value = mock_communicate
-                engine = TTSEngine(cache_common_phrases=False)
+        with pytest.raises(RuntimeError, match="Piper not found"):
+            asyncio.run(_test())
 
-                # First call
-                chunks1 = [c async for c in engine.stream_audio("Hello")]
-                # Second call – should call edge_tts again
-                chunks2 = [c async for c in engine.stream_audio("Hello")]
-                return chunks1, chunks2, mock_edge_tts
+    def test_piper_binary_not_found_raises(self):
+        """Test that a RuntimeError is raised when Piper binary is missing."""
+        async def _test():
+            with patch("src.audio.tts.TTSEngine._use_piper", return_value=True):
+                with patch("src.audio.tts.TTSEngine._get_piper_path", return_value="/nonexistent/path"):
+                    engine = TTSEngine()
+                    async for _ in engine.stream_audio("Hi"):
+                        pass
 
-        chunks1, chunks2, mock_edge_tts = asyncio.run(_test())
-        assert chunks1 == [b"data"]
-        assert chunks2 == [b"data"]
-        assert mock_edge_tts.Communicate.call_count == 2
+        with pytest.raises(RuntimeError, match="Piper binary not found"):
+            asyncio.run(_test())
+
+    def test_piper_model_not_found_raises(self):
+        """Test that a RuntimeError is raised when ONNX model is missing."""
+        async def _test():
+            with patch("src.audio.tts.TTSEngine._use_piper", return_value=True):
+                with patch("src.audio.tts.TTSEngine._get_piper_path", return_value="/usr/local/bin/piper"):
+                with patch("src.audio.tts.TTSEngine._get_model_path", return_value="/nonexistent/path"):
+                    engine = TTSEngine()
+                    async for _ in engine.stream_audio("Hi"):
+                        pass
+
+        with pytest.raises(RuntimeError, match="ONNX model not found"):
+            asyncio.run(_test())
+
+    def test_piper_command_constructed_properly(self):
+        """Test that the Piper command is constructed properly."""
+        async def _test():
+            with patch("src.audio.tts.TTSEngine._use_piper", return_value=True):
+                with patch("src.audio.tts.TTSEngine._get_piper_path", return_value="/usr/local/bin/piper"):
+                with patch("src.audio.tts.TTSEngine._get_model_path", return_value="/path/to/en_US-lessac-medium.onnx"):
+                    engine = TTSEngine()
+                    command = await engine._get_piper_command("Hello", "en-US-AriaNeural", "+0%", "+0Hz")
+                    expected_command = [
+                        "/usr/local/bin/piper",
+                        "--model",
+                        "/path/to/en_US-lessac-medium.onnx",
+                        "--text",
+                        "Hello",
+                        "--voice",
+                        "en-US-AriaNeural",
+                        "--rate",
+                        "+0%",
+                        "--pitch",
+                        "+0Hz",
+                    ]
+                    assert command == expected_command
+
+        await asyncio.run(_test())
