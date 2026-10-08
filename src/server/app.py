@@ -10,6 +10,7 @@ load_dotenv()
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from src.models.schemas import VoiceCommandPayload, AgentExecutionResult
 from src.agent.orchestrator import IRISOrchestrator
+from src.server.fleet import FleetManager, router as fleet_router
 
 logger = logging.getLogger("iris")
 
@@ -22,14 +23,18 @@ async def lifespan(app: FastAPI):
     
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model)
     app.state.orchestrator = orchestrator
+    app.state.fleet_manager = FleetManager()
     
     yield
     
     # Cleanup
     if hasattr(app.state, "orchestrator"):
         del app.state.orchestrator
+    if hasattr(app.state, "fleet_manager"):
+        del app.state.fleet_manager
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(fleet_router)
 
 @app.get("/health")
 async def health():
