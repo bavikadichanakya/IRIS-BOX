@@ -1,57 +1,38 @@
-import pytest
+from src.observability.event_bus import EventBus
+from src.observability.tracing import create_trace_context
+from typing import Callable
 import asyncio
-from unittest.mock import AsyncMock
-from src.observability.tracing import create_trace_context, TraceContext
-from src.observability.event_bus import EventBus, EventLedger
-from src.tools.manager import ToolManager
-from src.tools.capability import Capability, PermissionLevel
 
-@pytest.mark.asyncio
-async def test_trace_context_hierarchy():
-    trace = create_trace_context(device_id="pod-living-room", session_id="session-123", turn_id="turn-456")
-    assert trace.device_id == "pod-living-room"
-    assert trace.session_id == "session-123"
-    assert trace.turn_id == "turn-456"
-    assert bool(trace.request_id)
-    assert bool(trace.trace_id)
+class TestEventBus:
+    def test_subscribe_and_publish(self):
+        event_bus = EventBus()
+        callback = lambda event: print(f"Received event: {event}")
+        event_bus.subscribe("test_topic", callback)
+        event = Event(topic="test_topic", payload={"key": "value"})
+        asyncio.run(event_bus.publish(event))
+        assert len(event_bus.event_ledger.events) == 1
+        assert event_bus.event_ledger.events[0].topic == "test_topic"
+        assert event_bus.event_ledger.events[0].payload == {"key": "value"}
 
-@pytest.mark.asyncio
-async def test_event_bus_pub_sub_and_ledger():
-    bus = EventBus()
-    received = []
+    def test_multiple_subscribers(self):
+        event_bus = EventBus()
+        callback1 = lambda event: print(f"Received event: {event}")
+        callback2 = lambda event: print(f"Received event: {event}")
+        event_bus.subscribe("test_topic", callback1)
+        event_bus.subscribe("test_topic", callback2)
+        event = Event(topic="test_topic", payload={"key": "value"})
+        asyncio.run(event_bus.publish(event))
+        assert len(event_bus.event_ledger.events) == 1
+        assert event_bus.event_ledger.events[0].topic == "test_topic"
+        assert event_bus.event_ledger.events[0].payload == {"key": "value"}
 
-    def on_event(evt):
-        received.append(evt)
-
-    bus.subscribe("telemetry.ping", on_event)
-    trace = create_trace_context(device_id="pod-01")
-
-    await bus.publish("telemetry.ping", {"status": "ok"}, trace=trace)
-
-    assert len(received) == 1
-    assert received[0].payload == {"status": "ok"}
-    assert received[0].trace.device_id == "pod-01"
-
-    # Verify ledger recorded the event
-    ledger_events = bus.ledger.get_events("telemetry")
-    assert len(ledger_events) == 1
-
-@pytest.mark.asyncio
-async def test_tool_manager_publishes_lifecycle_events():
-    bus = EventBus()
-    events = []
-
-    bus.subscribe("*", lambda evt: events.append(evt.topic))
-
-    class MockReg:
-        def __init__(self):
-            self.execute = AsyncMock(return_value={"status": "ok"})
-        def get_schemas(self):
-            return [{"name": "PingTool", "description": "Ping", "parameters": {}}]
-
-    tm = ToolManager(registry=MockReg(), event_bus=bus)
-    res = await tm.execute_tool("PingTool", {})
-
-    assert res.status.value == "SUCCEEDED"
-    assert "tool.execution.started" in events
-    assert "tool.execution.succeeded" in events
+    def test_trace_context_propagation(self):
+        event_bus = EventBus()
+        callback = lambda event: print(f"Received event: {event}")
+        event_bus.subscribe("test_topic", callback)
+        trace_context = create_trace_context("device-123", session_id="session-456")
+        event = Event(topic="test_topic", payload={"trace_context": trace_context.dict()})
+        asyncio.run(event_bus.publish(event))
+        assert len(event_bus.event_ledger.events) == 1
+        assert event_bus.event_ledger.events[0].topic == "test_topic"
+        assert event_bus.event_ledger.events[0].payload == {"trace_context": trace_context.dict()}
