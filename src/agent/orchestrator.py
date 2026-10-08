@@ -1,11 +1,12 @@
-﻿import inspect
+import inspect
 import json
+import uuid
 from typing import Dict, List, Optional, Type
 
 import openai
 from pydantic import BaseModel
 
-from src.models.schemas import AgentExecutionResult
+from src.models.schemas import AgentExecutionResult, StreamChunkPayload
 from src.tools.registry import BaseTool, ToolRegistry
 
 
@@ -158,4 +159,107 @@ class IRISOrchestrator:
                 tool_name=tool_name,
                 output_payload={},
                 error=f"Tool execution failed: {e}"
+            )
+
+    async def stream_request(self, user_prompt: str):
+        """
+        Stream LLM response tokens or tool execution results.
+        Yields StreamChunkPayload objects.
+        """
+        session_id = str(uuid.uuid4())
+        tool_schemas = self._get_tool_schemas()
+
+        tools_param = [
+            {
+                "type": "function",
+                "function": {
+                    "name": s["name"],
+                    "description": s["description"],
+                    "parameters": s["parameters"],
+                }
+            }
+            for s in tool_schemas
+        ]
+
+        async_client = openai.AsyncOpenAI(base_url=self.client.base_url, api_key=self.client.api_key)
+
+        try:
+            stream = await async_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are IRIS, an AI smart speaker assistant. If a user asks for home automation, system tasks, or browser tasks, call the appropriate tool."
+                    },
+                    {"role": "user", "content": user_prompt}
+                ],
+                tools=tools_param if tools_param else None,
+                tool_choice="auto" if tools_param else None,
+                stream=True,
+            )
+        except Exception as e:
+            yield StreamChunkPayload(
+                chunk_type="complete",
+                delta_text=f"Error: {e}",
+                session_id=session_id
+            )
+            return
+
+        tool_name = None
+        raw_args = ""
+        text_buffer = ""
+
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text_buffer += delta.content
+                yield StreamChunkPayload(
+                    chunk_type="text_delta",
+                    delta_text=delta.content,
+                    session_id=session_id
+                )
+            if delta.tool_calls:
+                for call in delta.tool_calls:
+                    if call.function.name:
+                        tool_name = call.function.name
+                    if call.function.arguments:
+                        raw_args += call.function.arguments
+
+        if tool_name:
+            try:
+                payload_model = self._payload_models.get(tool_name)
+                if not payload_model:
+                    yield StreamChunkPayload(
+                        chunk_type="complete",
+                        delta_text=f"Unknown tool: {tool_name}",
+                        session_id=session_id
+                    )
+                    return
+                args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                payload = payload_model(**args_dict)
+                tool = self.tool_registry.get_tool(tool_name)
+                result = tool.execute(payload)
+                # Encode result as JSON string in delta_text
+                result_json = json.dumps({
+                    "tool_name": tool_name,
+                    "success": result.success,
+                    "output_payload": result.output_payload,
+                    "error": result.error
+                })
+                yield StreamChunkPayload(
+                    chunk_type="tool_call",
+                    delta_text=result_json,
+                    session_id=session_id
+                )
+            except Exception as e:
+                yield StreamChunkPayload(
+                    chunk_type="complete",
+                    delta_text=f"Error: {e}",
+                    session_id=session_id
+                )
+        else:
+            yield StreamChunkPayload(
+                chunk_type="complete",
+                delta_text=text_buffer,
+                session_id=session_id
             )

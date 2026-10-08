@@ -80,3 +80,38 @@ async def websocket_endpoint(websocket: WebSocket):
                 
     except WebSocketDisconnect:
         pass
+
+@app.websocket("/ws/stream")
+async def websocket_stream(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                payload_dict = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json({"error": "Invalid JSON"})
+                continue
+
+            # Support ping/pong
+            if payload_dict.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
+            user_prompt = payload_dict.get("prompt")
+            if not user_prompt:
+                await websocket.send_json({"error": "Missing 'prompt' field"})
+                continue
+
+            orchestrator_instance = getattr(websocket.app.state, 'orchestrator', None)
+            if orchestrator_instance is None:
+                await websocket.send_json({"error": "Orchestrator not initialized"})
+                continue
+
+            try:
+                async for chunk in orchestrator_instance.stream_request(user_prompt):
+                    await websocket.send_json(chunk.model_dump())
+            except Exception as err:
+                await websocket.send_json({"error": f"Streaming failed: {err}"})
+    except WebSocketDisconnect:
+        pass

@@ -48,3 +48,12 @@ class AgentExecutionResult(BaseModel):
     tool_name: str
     output_payload: Dict
     error: Optional[str] = None
+
+
+class StreamChunkPayload(BaseModel):
+    """
+    Schema for a streaming chunk.
+    """
+    chunk_type: Literal["text_delta", "tool_call", "complete"]
+    delta_text: str
+    session_id: str
