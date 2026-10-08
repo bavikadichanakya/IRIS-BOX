@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 class TraceContext(BaseModel):
     device_id: str
