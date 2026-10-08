@@ -1,8 +1,8 @@
 ﻿$ErrorActionPreference = "Continue"
 
-$env:GEMINI_API_KEY = "AQ.Ab8RN6IsDMpD9Zt-EQ2Er4Yc6Df8_4d-dt7WjyCVJDvjjCRi9g"
+# Primary Free Model on OpenRouter
+$AiderModel = "openrouter/dots-studio/dots-3-note-preview:free"
 
-$AiderModel = "gemini/gemini-2.5-flash"
 $AiderFlags = @(
     "--model", $AiderModel,
     "--yes-always",
@@ -11,7 +11,8 @@ $AiderFlags = @(
     "--no-show-release-notes"
 )
 
-Write-Host "=== Starting Overnight Aider Pipeline at $(Get-Date) ===" -ForegroundColor Green
+Write-Host "=== Starting 100% Free OpenRouter Overnight Pipeline at $(Get-Date) ===" -ForegroundColor Green
+Write-Host "Active Model: $AiderModel" -ForegroundColor Yellow
 
 $pipeline = @(
     @{ Task = "tasks\01_models_and_schemas.md"; Files = @("src\models\schemas.py", "tests\test_schemas.py") },
@@ -34,11 +35,13 @@ foreach ($step in $pipeline) {
         $fileArgs +=$f
     }
 
+    # Execute Aider using OpenRouter Free
     uvx --python 3.12 --from aider-chat aider.exe @AiderFlags @fileArgs --message-file $taskPath
 
     $lastCommit = git log -1 --oneline
     Write-Host "Completed $taskPath ->$lastCommit" -ForegroundColor Green
 
+    # Push progress incrementally to GitHub
     Write-Host "Pushing progress to GitHub (main)..." -ForegroundColor Yellow
     git push -u origin main
 
