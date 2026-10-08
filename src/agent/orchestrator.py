@@ -10,6 +10,29 @@ from src.models.schemas import AgentExecutionResult, StreamChunkPayload
 from src.tools.registry import BaseTool, ToolRegistry
 
 
+class SessionMemory:
+    """
+    In‑memory session store that keeps a sliding window of recent turns.
+    """
+    def __init__(self, max_messages: int = 10):
+        self.max_messages = max_messages
+        self.sessions: Dict[str, List[Dict]] = {}
+
+    def add_message(self, session_id: str, role: str, content: str, tool_calls: Optional[List[Dict]] = None):
+        if session_id not in self.sessions:
+            self.sessions[session_id] = []
+        msg = {"role": role, "content": content}
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        self.sessions[session_id].append(msg)
+        # sliding window
+        if len(self.sessions[session_id]) > self.max_messages:
+            self.sessions[session_id] = self.sessions[session_id][-self.max_messages:]
+
+    def get_history(self, session_id: str) -> List[Dict]:
+        return self.sessions.get(session_id, [])
+
+
 class IRISOrchestrator:
     """
     Orchestrates LLM interactions with function and tool calling to execute actions.
@@ -20,6 +43,7 @@ class IRISOrchestrator:
         self.tool_registry = ToolRegistry
         self._tool_schemas: Optional[List[Dict]] = None
         self._payload_models: Dict[str, Type[BaseModel]] = {}
+        self.session_memory = SessionMemory()
 
     def _get_tool_schemas(self) -> List[Dict]:
         """
@@ -68,11 +92,22 @@ class IRISOrchestrator:
         self._tool_schemas = tools
         return tools
 
-    def process_request(self, user_prompt: str) -> AgentExecutionResult:
+    def process_request(self, user_prompt: str, session_id: Optional[str] = None) -> AgentExecutionResult:
         """
         Process a user request by calling the LLM and executing the tool if returned.
         """
         tool_schemas = self._get_tool_schemas()
+
+        # Build message list with optional history
+        messages = [
+            {
+                "role": "system",
+                "content": "You are IRIS, an AI smart speaker assistant. If a user asks for home automation, system tasks, or browser tasks, call the appropriate tool."
+            }
+        ]
+        if session_id:
+            messages.extend(self.session_memory.get_history(session_id))
+        messages.append({"role": "user", "content": user_prompt})
 
         # Format as standard OpenAI/OpenRouter tools
         tools_param = [
@@ -90,13 +125,7 @@ class IRISOrchestrator:
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are IRIS, an AI smart speaker assistant. If a user asks for home automation, system tasks, or browser tasks, call the appropriate tool."
-                    },
-                    {"role": "user", "content": user_prompt}
-                ],
+                messages=messages,
                 tools=tools_param if tools_param else None,
                 tool_choice="auto" if tools_param else None,
             )
@@ -110,6 +139,26 @@ class IRISOrchestrator:
 
         message = response.choices[0].message
         
+        # Store user and assistant messages in session memory
+        if session_id:
+            self.session_memory.add_message(session_id, "user", user_prompt)
+            assistant_content = message.content or ""
+            tool_calls = None
+            if getattr(message, "tool_calls", None):
+                # serialize tool calls for storage
+                tool_calls = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments
+                        }
+                    }
+                    for call in message.tool_calls
+                ]
+            self.session_memory.add_message(session_id, "assistant", assistant_content, tool_calls)
+
         # Check both modern tool_calls and legacy function_call
         tool_name = None
         raw_args = "{}"
@@ -161,13 +210,24 @@ class IRISOrchestrator:
                 error=f"Tool execution failed: {e}"
             )
 
-    async def stream_request(self, user_prompt: str):
+    async def stream_request(self, user_prompt: str, session_id: Optional[str] = None):
         """
         Stream LLM response tokens or tool execution results.
         Yields StreamChunkPayload objects.
         """
-        session_id = str(uuid.uuid4())
+        session_id = session_id or str(uuid.uuid4())
         tool_schemas = self._get_tool_schemas()
+
+        # Build messages with optional history
+        messages = [
+            {
+                "role": "system",
+                "content": "You are IRIS, an AI smart speaker assistant. If a user asks for home automation, system tasks, or browser tasks, call the appropriate tool."
+            }
+        ]
+        if session_id:
+            messages.extend(self.session_memory.get_history(session_id))
+        messages.append({"role": "user", "content": user_prompt})
 
         tools_param = [
             {
@@ -186,13 +246,7 @@ class IRISOrchestrator:
         try:
             stream = await async_client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are IRIS, an AI smart speaker assistant. If a user asks for home automation, system tasks, or browser tasks, call the appropriate tool."
-                    },
-                    {"role": "user", "content": user_prompt}
-                ],
+                messages=messages,
                 tools=tools_param if tools_param else None,
                 tool_choice="auto" if tools_param else None,
                 stream=True,
@@ -224,6 +278,22 @@ class IRISOrchestrator:
                         tool_name = call.function.name
                     if call.function.arguments:
                         raw_args += call.function.arguments
+
+        # Persist user and assistant messages
+        self.session_memory.add_message(session_id, "user", user_prompt)
+        assistant_content = text_buffer or ""
+        tool_calls = None
+        if tool_name:
+            tool_calls = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": raw_args
+                    }
+                }
+            ]
+        self.session_memory.add_message(session_id, "assistant", assistant_content, tool_calls)
 
         if tool_name:
             try:
