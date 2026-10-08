@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import requests
 import subprocess
+import os
 
 from src.tools.registry import ToolRegistry, HomeAssistantTool, SystemCommandTool, BrowserTool, BaseTool
 from src.models.schemas import SmartHomeAction, LaptopSystemAction, BrowserAction, AgentExecutionResult
@@ -83,19 +84,74 @@ class TestHomeAssistantTool(unittest.TestCase):
         self.tool = HomeAssistantTool(ha_url=self.ha_url, ha_token=self.ha_token)
         self.mock_tool = HomeAssistantTool(ha_url="", ha_token="", mock_mode=True)
 
-    def test_init_validation_non_mock_mode(self):
-        with self.assertRaises(ValueError) as cm:
-            HomeAssistantTool(ha_url="", ha_token="token")
-        self.assertIn("HA URL and token must be provided", str(cm.exception))
-
-        with self.assertRaises(ValueError) as cm:
-            HomeAssistantTool(ha_url="url", ha_token="")
-        self.assertIn("HA URL and token must be provided", str(cm.exception))
-
+    def test_init_explicit_mock_mode_no_credentials(self):
+        # Should not raise error when mock_mode=True is explicit
         try:
-            HomeAssistantTool(ha_url="", ha_token="", mock_mode=True)
+            tool = HomeAssistantTool(ha_url="", ha_token="", mock_mode=True)
+            self.assertTrue(tool.mock_mode)
         except ValueError:
             self.fail("HomeAssistantTool __init__ raised ValueError in mock_mode with empty credentials.")
+
+    def test_init_auto_mock_mode_when_credentials_missing(self):
+        # When credentials are missing and mock_mode is not specified, should default to mock_mode=True
+        # Ensure no HA_URL or HA_TOKEN in environment for this test
+        with patch.dict(os.environ, {}, clear=True):
+            tool = HomeAssistantTool()
+            self.assertTrue(tool.mock_mode)
+            self.assertEqual(tool.ha_url, "")
+            self.assertEqual(tool.ha_token, "")
+
+    def test_init_auto_mock_mode_when_credentials_partial(self):
+        # Only URL provided, no token -> should default to mock_mode=True
+        with patch.dict(os.environ, {}, clear=True):
+            tool = HomeAssistantTool(ha_url="http://localhost:8123")
+            self.assertTrue(tool.mock_mode)
+
+        # Only token provided, no URL -> should default to mock_mode=True
+        with patch.dict(os.environ, {}, clear=True):
+            tool = HomeAssistantTool(ha_token="some_token")
+            self.assertTrue(tool.mock_mode)
+
+    def test_init_explicit_non_mock_mode_with_credentials(self):
+        # Should work when mock_mode=False and credentials are provided
+        tool = HomeAssistantTool(ha_url=self.ha_url, ha_token=self.ha_token, mock_mode=False)
+        self.assertFalse(tool.mock_mode)
+        self.assertEqual(tool.ha_url, self.ha_url)
+        self.assertEqual(tool.ha_token, self.ha_token)
+
+    def test_init_explicit_non_mock_mode_missing_credentials_raises(self):
+        # Should raise ValueError when mock_mode=False and credentials are missing
+        with self.assertRaises(ValueError) as cm:
+            HomeAssistantTool(ha_url="", ha_token="token", mock_mode=False)
+        self.assertIn("HA URL and token must be provided", str(cm.exception))
+
+        with self.assertRaises(ValueError) as cm:
+            HomeAssistantTool(ha_url="url", ha_token="", mock_mode=False)
+        self.assertIn("HA URL and token must be provided", str(cm.exception))
+
+    def test_init_from_env_vars_when_no_args(self):
+        # Test that env vars are used when no args provided
+        with patch.dict(os.environ, {"HA_URL": "http://env-url", "HA_TOKEN": "env-token"}):
+            tool = HomeAssistantTool()
+            self.assertFalse(tool.mock_mode)
+            self.assertEqual(tool.ha_url, "http://env-url")
+            self.assertEqual(tool.ha_token, "env-token")
+
+    def test_init_env_vars_override_empty_args(self):
+        # Test that env vars are used when args are empty strings
+        with patch.dict(os.environ, {"HA_URL": "http://env-url", "HA_TOKEN": "env-token"}):
+            tool = HomeAssistantTool(ha_url="", ha_token="")
+            self.assertFalse(tool.mock_mode)
+            self.assertEqual(tool.ha_url, "http://env-url")
+            self.assertEqual(tool.ha_token, "env-token")
+
+    def test_init_args_override_env_vars(self):
+        # Test that provided args take precedence over env vars
+        with patch.dict(os.environ, {"HA_URL": "http://env-url", "HA_TOKEN": "env-token"}):
+            tool = HomeAssistantTool(ha_url="http://arg-url", ha_token="arg-token")
+            self.assertFalse(tool.mock_mode)
+            self.assertEqual(tool.ha_url, "http://arg-url")
+            self.assertEqual(tool.ha_token, "arg-token")
 
 
     @patch('requests.post')
