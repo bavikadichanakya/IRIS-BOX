@@ -15,6 +15,7 @@ class Database:
     async def connect(self):
         """Establish database connection and initialize schema."""
         self._conn = await aiosqlite.connect(self.db_path)
+        self._conn.row_factory = aiosqlite.Row
         await self._init_schema()
 
     async def close(self):
