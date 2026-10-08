@@ -82,7 +82,7 @@ async def test_conversation_with_tool_calls(db):
 
     convs = await db.get_conversations("session1")
     assert len(convs) == 1
-    assert convs[0]["tool_calls] is not None
+    assert convs[0]["tool_calls"] is not None
     # Verify JSON serialization worked
     import json
     parsed = json.loads(convs[0]["tool_calls"])
