@@ -32,7 +32,8 @@ class FakeFunction:
 
 
 class FakeToolCall:
-    def __init__(self, function):
+    def __init__(self, id=None, function=None):
+        self.id = id
         self.function = function
 
 
@@ -78,7 +79,7 @@ def test_process_request_retains_context(orchestrator):
         first_message = FakeMessage(
             content="",
             tool_calls=[
-                FakeToolCall(FakeFunction(name="DummyTool", arguments="{}"))
+                FakeToolCall(id="1", function=FakeFunction(name="DummyTool", arguments="{}"))
             ]
         )
         first_response = FakeResponse(first_message)
@@ -91,7 +92,7 @@ def test_process_request_retains_context(orchestrator):
         second_message = FakeMessage(
             content="",
             tool_calls=[
-                FakeToolCall(FakeFunction(name="DummyTool", arguments="{}"))
+                FakeToolCall(id="2", function=FakeFunction(name="DummyTool", arguments="{}"))
             ]
         )
         second_response = FakeResponse(second_message)
