@@ -1,11 +1,13 @@
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from starlette.testclient import TestClient
+from fastapi import FastAPI
 
-from src.server.app import app
+from src.server.app import app, lifespan
 from src.models.schemas import AgentExecutionResult, VoiceCommandPayload
+from src.agent.orchestrator import IRISOrchestrator
 
 
 @pytest.fixture
@@ -76,3 +78,33 @@ def test_websocket_orchestrator_not_initialized():
         response = websocket.receive_json()
         assert "error" in response
         assert response["error"] == "Orchestrator not initialized"
+
+
+def test_websocket_ping_pong(mock_orchestrator):
+    client = TestClient(app)
+    with client.websocket_connect("/ws/voice-stream") as websocket:
+        websocket.send_json({"type": "ping"})
+        response = websocket.receive_json()
+        assert response == {"type": "pong"}
+
+
+def test_lifespan_startup():
+    """Test that lifespan properly initializes the orchestrator."""
+    test_app = FastAPI(lifespan=lifespan)
+    
+    with patch.dict('os.environ', {
+        'OPENAI_API_BASE': 'https://test.example.com',
+        'OPENROUTER_API_KEY': 'test_key',
+        'OPENAI_MODEL': 'test-model'
+    }):
+        with patch('src.server.app.IRISOrchestrator') as mock_orchestrator_class:
+            mock_instance = Mock()
+            mock_orchestrator_class.return_value = mock_instance
+            
+            with TestClient(test_app) as client:
+                assert test_app.state.orchestrator is mock_instance
+                mock_orchestrator_class.assert_called_once_with(
+                    api_base='https://test.example.com',
+                    api_key='test_key',
+                    model='test-model'
+                )

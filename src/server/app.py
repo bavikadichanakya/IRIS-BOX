@@ -1,7 +1,8 @@
-﻿import os
+import os
 import json
 import logging
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -12,18 +13,23 @@ from src.agent.orchestrator import IRISOrchestrator
 
 logger = logging.getLogger("iris")
 
-orchestrator: Optional[IRISOrchestrator] = None
-app = FastAPI()
-
-@app.on_event("startup")
-async def startup_event():
-    global orchestrator
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     api_base = os.getenv("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY", "")
     model = os.getenv("OPENAI_MODEL", "dots-studio/dots-3-note-preview:free")
     
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model)
     app.state.orchestrator = orchestrator
+    
+    yield
+    
+    # Cleanup
+    if hasattr(app.state, "orchestrator"):
+        del app.state.orchestrator
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 async def health():
@@ -40,6 +46,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 payload_dict = json.loads(data)
             except json.JSONDecodeError:
                 await websocket.send_json({"error": "Invalid JSON"})
+                continue
+
+            # Handle ping/pong heartbeat
+            if payload_dict.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
                 continue
 
             try:
