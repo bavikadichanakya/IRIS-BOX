@@ -26,6 +26,30 @@ from src.observability.metrics import runtime_metrics
 
 from src.storage.db import Database
 
+import uuid
+import time
+import asyncio
+
+from src.voice.pipeline import VoicePipeline
+from src.server.websocket import ws_manager, WebSocketConnectionManager
+from src.server.protocol import (
+    InboundConnectPayload,
+    InboundAudioFramePayload,
+    InboundTextInputPayload,
+    InboundPingPayload,
+    InboundCancelPayload,
+    OutboundConnectedPayload,
+    OutboundPongPayload,
+    OutboundVADPayload,
+    OutboundTranscriptPayload,
+    OutboundTokenDeltaPayload,
+    OutboundToolStatusPayload,
+    OutboundAudioOutputPayload,
+    OutboundTurnCompletePayload,
+    OutboundErrorPayload,
+    parse_inbound_message,
+)
+
 logger = logging.getLogger("iris")
 
 @asynccontextmanager
@@ -41,27 +65,37 @@ async def lifespan(app: FastAPI):
 
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
     fleet_mgr = FleetManager()
+    tts_eng = TTSEngine()
+    voice_pipe = VoicePipeline(orchestrator=orchestrator, tts=tts_eng)
 
     app.state.db = db
     app.state.orchestrator = orchestrator
-    app.state.tts_engine = TTSEngine()
+    app.state.tts_engine = tts_eng
     app.state.fleet_manager = fleet_mgr
+    app.state.ws_manager = ws_manager
+    app.state.voice_pipeline = voice_pipe
 
     health_supervisor.db_connection = db
     health_supervisor.orchestrator = orchestrator
     health_supervisor.fleet_manager = fleet_mgr
+    health_supervisor.ws_manager = ws_manager
 
     yield
 
     # Cleanup
     await db.close()
     health_supervisor.db_connection = None
+    health_supervisor.ws_manager = None
     if hasattr(app.state, "orchestrator"):
         del app.state.orchestrator
     if hasattr(app.state, "fleet_manager"):
         del app.state.fleet_manager
     if hasattr(app.state, "db"):
         del app.state.db
+    if hasattr(app.state, "ws_manager"):
+        del app.state.ws_manager
+    if hasattr(app.state, "voice_pipeline"):
+        del app.state.voice_pipeline
 
 
 app = FastAPI(lifespan=lifespan)
@@ -71,6 +105,152 @@ app.include_router(fleet_router)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "unknown", session_id: Optional[str] = None):
+    await websocket.accept()
+    sess_id = session_id or str(uuid.uuid4())
+    dev_id = device_id or "unknown"
+
+    ws_mgr: WebSocketConnectionManager = getattr(websocket.app.state, "ws_manager", ws_manager)
+    await ws_mgr.connect(websocket, device_id=dev_id, session_id=sess_id)
+
+    # Send connected envelope
+    await ws_mgr.send_payload(sess_id, OutboundConnectedPayload(session_id=sess_id, version="1.0"))
+
+    try:
+        while True:
+            message = await websocket.receive()
+
+            if message.get("type") == "websocket.disconnect":
+                break
+
+            # 1. Handle binary frame
+            if "bytes" in message and message["bytes"]:
+                raw_bytes = message["bytes"]
+                voice_pipe = getattr(websocket.app.state, "voice_pipeline", None)
+                if voice_pipe:
+                    res = await voice_pipe.process_audio_chunk(raw_bytes)
+                    if res.get("is_speech"):
+                        await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_START"))
+                    else:
+                        await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_END"))
+                continue
+
+            # 2. Handle text frame
+            if "text" in message and message["text"]:
+                raw_text = message["text"]
+                try:
+                    payload_dict = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    await ws_mgr.send_payload(sess_id, OutboundErrorPayload(code="INVALID_JSON", message="Payload must be valid JSON"))
+                    continue
+
+                try:
+                    msg = parse_inbound_message(payload_dict)
+                except Exception as err:
+                    await ws_mgr.send_payload(sess_id, OutboundErrorPayload(code="INVALID_PROTOCOL", message=str(err)))
+                    continue
+
+                if isinstance(msg, InboundPingPayload):
+                    await ws_mgr.send_payload(sess_id, OutboundPongPayload(timestamp=msg.timestamp))
+
+                elif isinstance(msg, InboundConnectPayload):
+                    if msg.device_id and msg.device_id != "unknown":
+                        dev_id = msg.device_id
+                        ws_mgr.session_to_device[sess_id] = dev_id
+                        ws_mgr.device_to_session[dev_id] = sess_id
+                    await ws_mgr.send_payload(sess_id, OutboundConnectedPayload(session_id=sess_id, version="1.0"))
+
+                elif isinstance(msg, InboundCancelPayload):
+                    count = ws_mgr.cancel_tasks_sync(sess_id)
+                    logger.info(f"Cancelled {count} tasks for session {sess_id} via cancel message.")
+
+                elif isinstance(msg, InboundTextInputPayload):
+                    request_id = str(uuid.uuid4())
+
+                    async def process_text_task():
+                        start_t = time.time()
+                        orchestrator = getattr(websocket.app.state, "orchestrator", None)
+                        tts_engine = getattr(websocket.app.state, "tts_engine", None)
+
+                        # Emit final transcript payload
+                        await ws_mgr.send_payload(sess_id, OutboundTranscriptPayload(text=msg.text, is_final=True, request_id=request_id))
+
+                        if not orchestrator:
+                            await ws_mgr.send_payload(sess_id, OutboundErrorPayload(code="ORCHESTRATOR_UNAVAILABLE", message="Orchestrator not ready"))
+                            return
+
+                        sentence_buf = ""
+                        delimiters = re.compile(r"([.!?\n]+(?:\s+|$))")
+
+                        async def send_tts_chunk(text_part: str):
+                            if not tts_engine:
+                                return
+                            clean = text_part.strip()
+                            if not clean:
+                                return
+                            async for pcm_chunk in tts_engine.stream_audio(clean):
+                                b64_pcm = base64.b64encode(pcm_chunk).decode("utf-8")
+                                await ws_mgr.send_payload(sess_id, OutboundAudioOutputPayload(format="pcm16", data=b64_pcm))
+
+                        try:
+                            async for chunk in orchestrator.stream_request(
+                                user_prompt=msg.text,
+                                session_id=sess_id,
+                                device_id=dev_id,
+                                request_id=request_id
+                            ):
+                                if chunk.chunk_type == "text_delta" and chunk.delta_text:
+                                    await ws_mgr.send_payload(sess_id, OutboundTokenDeltaPayload(delta=chunk.delta_text, request_id=request_id))
+                                    sentence_buf += chunk.delta_text
+                                    parts = delimiters.split(sentence_buf)
+                                    if len(parts) > 2:
+                                        ready = "".join(parts[:-1]).strip()
+                                        sentence_buf = parts[-1]
+                                        if ready:
+                                            await send_tts_chunk(ready)
+
+                                elif chunk.chunk_type == "tool_call":
+                                    await ws_mgr.send_payload(sess_id, OutboundToolStatusPayload(tool_name=chunk.tool_name or "unknown", status="INVOKING"))
+                                elif chunk.chunk_type == "tool_result":
+                                    await ws_mgr.send_payload(sess_id, OutboundToolStatusPayload(tool_name=chunk.tool_name or "unknown", status="COMPLETED", output_payload=chunk.tool_output))
+
+                            if sentence_buf.strip():
+                                await send_tts_chunk(sentence_buf.strip())
+
+                            duration = (time.time() - start_t) * 1000.0
+                            await ws_mgr.send_payload(sess_id, OutboundTurnCompletePayload(request_id=request_id, duration_ms=round(duration, 2)))
+
+                        except asyncio.CancelledError:
+                            logger.info(f"Text processing cancelled for request_id '{request_id}'")
+                            raise
+                        except Exception as err:
+                            await ws_mgr.send_payload(sess_id, OutboundErrorPayload(code="PROCESSING_ERROR", message=str(err)))
+
+                    t = asyncio.create_task(process_text_task())
+                    ws_mgr.register_task(sess_id, t)
+
+                elif isinstance(msg, InboundAudioFramePayload):
+                    audio_bytes = base64.b64decode(msg.data)
+                    voice_pipe = getattr(websocket.app.state, "voice_pipeline", None)
+                    if voice_pipe:
+                        res = await voice_pipe.process_audio_chunk(audio_bytes)
+                        if res.get("is_speech"):
+                            await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_START"))
+                        else:
+                            await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_END"))
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await ws_mgr.disconnect(sess_id)
+
+
+@app.websocket("/ws")
+@app.websocket("/v1/ws")
+async def websocket_realtime_endpoint(websocket: WebSocket, device_id: Optional[str] = "unknown", session_id: Optional[str] = None):
+    await realtime_ws_handler(websocket, device_id=device_id, session_id=session_id)
 
 @app.websocket("/ws/voice-stream")
 async def websocket_endpoint(websocket: WebSocket):

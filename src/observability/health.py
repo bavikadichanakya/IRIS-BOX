@@ -43,12 +43,14 @@ class HealthSupervisor:
         tool_manager: Optional[Any] = None,
         fleet_manager: Optional[Any] = None,
         db_connection: Optional[Any] = None,
+        ws_manager: Optional[Any] = None,
     ):
         self.start_time = time.time()
         self.orchestrator = orchestrator
         self.tool_manager = tool_manager
         self.fleet_manager = fleet_manager
         self.db_connection = db_connection
+        self.ws_manager = ws_manager
         self.subsystems: Dict[str, SubsystemHealth] = {
             "api": SubsystemHealth(name="api", status=HealthState.HEALTHY, message="API service alive"),
             "llm_provider": SubsystemHealth(name="llm_provider", status=HealthState.INITIALIZING),
@@ -244,13 +246,16 @@ class HealthSupervisor:
             connected = 0
             if self.fleet_manager and hasattr(self.fleet_manager, "list_devices"):
                 connected = len(self.fleet_manager.list_devices())
+            ws_connected = 0
+            if self.ws_manager and hasattr(self.ws_manager, "get_active_connection_count"):
+                ws_connected = self.ws_manager.get_active_connection_count()
             elapsed = (time.perf_counter() - start) * 1000.0
             return SubsystemHealth(
                 name="fleet",
                 status=HealthState.HEALTHY,
                 latency_ms=elapsed,
-                details={"connected_devices": connected},
-                message=f"Fleet manager operational ({connected} connected devices)"
+                details={"connected_devices": connected, "active_websocket_connections": ws_connected},
+                message=f"Fleet manager operational ({connected} devices, {ws_connected} active WS connections)"
             )
         except Exception as e:
             elapsed = (time.perf_counter() - start) * 1000.0
