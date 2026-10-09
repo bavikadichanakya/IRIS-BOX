@@ -80,6 +80,17 @@ class HealthSupervisor:
     async def check_llm_provider(self) -> SubsystemHealth:
         start = time.perf_counter()
         if not self.orchestrator:
+            try:
+                import os
+                from src.agent.orchestrator import IRISOrchestrator
+                api_base = os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
+                api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("IRIS_API_KEY", "ollama")
+                model = os.getenv("OPENAI_MODEL", "llama3.2")
+                self.orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model)
+            except Exception:
+                pass
+
+        if not self.orchestrator:
             return SubsystemHealth(
                 name="llm_provider",
                 status=HealthState.DEGRADED,
@@ -98,10 +109,11 @@ class HealthSupervisor:
                     },
                     message="LLM provider client configured"
                 )
-            return SubsystemHealth(name="llm_provider", status=HealthState.UNHEALTHY, message="LLM client unconfigured")
+            return SubsystemHealth(name="llm_provider", status=HealthState.DEGRADED, message="LLM client unconfigured")
         except Exception as e:
             elapsed = (time.perf_counter() - start) * 1000.0
-            return SubsystemHealth(name="llm_provider", status=HealthState.UNHEALTHY, latency_ms=elapsed, message=str(e))
+            return SubsystemHealth(name="llm_provider", status=HealthState.DEGRADED, latency_ms=elapsed, message=str(e))
+
 
     async def check_tools(self) -> SubsystemHealth:
         start = time.perf_counter()
@@ -179,11 +191,11 @@ class HealthSupervisor:
     async def check_storage(self) -> SubsystemHealth:
         start = time.perf_counter()
         try:
-            from src.storage.db import Database
-            db = Database()
-            await db.connect()
-            try:
-                rows = await db.get_conversations("health_check_session")
+            if self.db_connection and getattr(self.db_connection, "_conn", None) is not None:
+                if hasattr(self.db_connection, "get_recent_turns"):
+                    await self.db_connection.get_recent_turns("health_check_session", limit=1)
+                else:
+                    await self.db_connection.get_conversations("health_check_session")
                 elapsed = (time.perf_counter() - start) * 1000.0
                 return SubsystemHealth(
                     name="storage",
@@ -192,8 +204,22 @@ class HealthSupervisor:
                     details={"database": "SQLite", "connected": True},
                     message="Database query successful"
                 )
-            finally:
-                await db.close()
+            else:
+                from src.storage.db import Database
+                db = Database()
+                await db.connect()
+                try:
+                    await db.get_recent_turns("health_check_session", limit=1)
+                    elapsed = (time.perf_counter() - start) * 1000.0
+                    return SubsystemHealth(
+                        name="storage",
+                        status=HealthState.HEALTHY,
+                        latency_ms=elapsed,
+                        details={"database": "SQLite", "connected": True},
+                        message="Database query successful"
+                    )
+                finally:
+                    await db.close()
         except Exception as e:
             elapsed = (time.perf_counter() - start) * 1000.0
             return SubsystemHealth(
@@ -202,6 +228,8 @@ class HealthSupervisor:
                 latency_ms=elapsed,
                 message=f"Database connectivity failed: {e}"
             )
+
+
 
     async def check_fleet(self) -> SubsystemHealth:
         start = time.perf_counter()

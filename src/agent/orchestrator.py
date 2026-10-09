@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import json
+import time
 import uuid
 from typing import Dict, List, Optional, Type, Union
 
@@ -13,6 +14,7 @@ from src.tools.registry import BaseTool, ToolRegistry
 from src.tools.manager import ToolManager
 from src.tools.capability import ToolResult, ExecutionStatus
 from src.observability.event_bus import EventBus
+from src.storage.db import Database
 
 
 def _run_async(coro):
@@ -55,6 +57,7 @@ class IRISOrchestrator:
     """
     Orchestrates LLM interactions with function and tool calling to execute actions.
     Uses ToolManager for policy enforcement, timeout management, and safe execution.
+    Persists sessions, turns, tool execution outcomes, and audit logs to Database.
     """
     def __init__(
         self,
@@ -64,6 +67,7 @@ class IRISOrchestrator:
         tool_registry: Optional[Union[Type[ToolRegistry], ToolRegistry]] = None,
         event_bus: Optional[EventBus] = None,
         tool_manager: Optional[ToolManager] = None,
+        database: Optional[Database] = None,
     ):
         self.client = openai.OpenAI(base_url=api_base, api_key=api_key)
         self.model = model
@@ -73,6 +77,7 @@ class IRISOrchestrator:
             registry=self.tool_registry,
             event_bus=self.event_bus
         )
+        self.database = database
         self._tool_schemas: Optional[List[Dict]] = None
         self._payload_models: Dict[str, Type[BaseModel]] = {}
         self.session_memory = SessionMemory()
@@ -98,8 +103,7 @@ class IRISOrchestrator:
             if isinstance(payload_type, type) and issubclass(payload_type, BaseModel):
                 schema = payload_type.model_json_schema()
                 description = tool_class.__doc__ or f"Execute {name} action"
-                
-                # Hybrid dictionary: top-level keys for test suite, 'type' & 'function' for OpenAI tools API
+
                 tool_def = {
                     "name": name,
                     "description": description.strip(),
@@ -121,7 +125,7 @@ class IRISOrchestrator:
                 }
                 tools.append(tool_def)
                 self._payload_models[name] = payload_type
-                
+
         self._tool_schemas = tools
         return tools
 
@@ -170,7 +174,10 @@ class IRISOrchestrator:
     ) -> AgentExecutionResult:
         """
         Process a user request by calling the LLM and executing the tool via ToolManager.
+        Persists turn and tool execution details to database if bound.
         """
+        session_id = session_id or str(uuid.uuid4())
+        start_time = time.perf_counter()
         tool_schemas = self._get_tool_schemas()
 
         # Build message list with optional history
@@ -181,10 +188,21 @@ class IRISOrchestrator:
             }
         ]
         if session_id:
-            messages.extend(self.session_memory.get_history(session_id))
+            if self.database:
+                try:
+                    db_turns = _run_async(self.database.get_recent_turns(session_id, limit=10))
+                    for turn in db_turns:
+                        messages.append({"role": "user", "content": turn["user_input"]})
+                        asst_msg = {"role": "assistant", "content": turn["assistant_response"]}
+                        if turn.get("metadata") and turn["metadata"].get("tool_calls"):
+                            asst_msg["tool_calls"] = turn["metadata"]["tool_calls"]
+                        messages.append(asst_msg)
+                except Exception:
+                    messages.extend(self.session_memory.get_history(session_id))
+            else:
+                messages.extend(self.session_memory.get_history(session_id))
         messages.append({"role": "user", "content": user_prompt})
 
-        # Format as standard OpenAI/OpenRouter tools
         tools_param = [
             {
                 "type": "function",
@@ -205,35 +223,47 @@ class IRISOrchestrator:
                 tool_choice="auto" if tools_param else None,
             )
         except Exception as e:
-            return AgentExecutionResult(
+            res = AgentExecutionResult(
                 success=False,
                 tool_name="",
                 output_payload={},
                 error=f"LLM API call failed: {e}"
             )
+            if self.database:
+                try:
+                    _run_async(self.database.save_turn(
+                        session_id=session_id,
+                        user_prompt=user_prompt,
+                        assistant_response=res.error,
+                        trace_ids=[trace_id] if trace_id else [],
+                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                        device_id=device_id
+                    ))
+                except Exception:
+                    pass
+            return res
 
         message = response.choices[0].message
-        
-        # Store user and assistant messages in session memory
+        assistant_content = message.content or ""
+        tool_calls = None
+        if getattr(message, "tool_calls", None):
+            tool_calls = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments
+                    }
+                }
+                for call in message.tool_calls
+            ]
+
+        # Store in session memory
         if session_id:
             self.session_memory.add_message(session_id, "user", user_prompt)
-            assistant_content = message.content or ""
-            tool_calls = None
-            if getattr(message, "tool_calls", None):
-                tool_calls = [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": call.function.arguments
-                        }
-                    }
-                    for call in message.tool_calls
-                ]
             self.session_memory.add_message(session_id, "assistant", assistant_content, tool_calls)
 
-        # Check both modern tool_calls and legacy function_call
         tool_name = None
         raw_args = "{}"
 
@@ -245,32 +275,78 @@ class IRISOrchestrator:
             tool_name = message.function_call.name
             raw_args = message.function_call.arguments
         else:
-            return AgentExecutionResult(
+            res = AgentExecutionResult(
                 success=False,
                 tool_name="",
                 output_payload={},
                 error="LLM did not return a function call."
             )
+            total_duration_ms = (time.perf_counter() - start_time) * 1000.0
+            if self.database:
+                try:
+                    _run_async(self.database.save_turn(
+                        session_id=session_id,
+                        user_prompt=user_prompt,
+                        assistant_response=assistant_content or "No function call",
+                        trace_ids=[trace_id] if trace_id else [],
+                        duration_ms=total_duration_ms,
+                        device_id=device_id
+                    ))
+                    _run_async(self.database.record_audit_event(
+                        event_type="orchestrator.request_processed",
+                        payload={"request_id": request_id, "text": assistant_content, "duration_ms": total_duration_ms},
+                        correlation_id=trace_id or request_id or session_id,
+                        device_id=device_id
+                    ))
+                except Exception:
+                    pass
+            return res
 
         try:
             payload_model = self._payload_models.get(tool_name)
             if not payload_model:
-                return AgentExecutionResult(
+                res = AgentExecutionResult(
                     success=False,
                     tool_name=tool_name,
                     output_payload={},
                     error=f"Unknown tool: {tool_name}"
                 )
-            
+                if self.database:
+                    try:
+                        _run_async(self.database.save_turn(
+                            session_id=session_id,
+                            user_prompt=user_prompt,
+                            assistant_response=res.error,
+                            trace_ids=[trace_id] if trace_id else [],
+                            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                            device_id=device_id
+                        ))
+                    except Exception:
+                        pass
+                return res
+
             args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             payload = payload_model(**args_dict)
         except Exception as e:
-            return AgentExecutionResult(
+            res = AgentExecutionResult(
                 success=False,
                 tool_name=tool_name,
                 output_payload={},
                 error=f"Failed to parse function arguments: {e}"
             )
+            if self.database:
+                try:
+                    _run_async(self.database.save_turn(
+                        session_id=session_id,
+                        user_prompt=user_prompt,
+                        assistant_response=res.error,
+                        trace_ids=[trace_id] if trace_id else [],
+                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                        device_id=device_id
+                    ))
+                except Exception:
+                    pass
+            return res
 
         context = {
             "device_id": device_id,
@@ -279,6 +355,7 @@ class IRISOrchestrator:
         }
 
         try:
+            tool_start = time.perf_counter()
             tool_result: ToolResult = _run_async(
                 self.tool_manager.execute_tool(
                     name=tool_name,
@@ -288,14 +365,75 @@ class IRISOrchestrator:
                     context=context
                 )
             )
-            return self._format_tool_result(tool_name, tool_result)
+            tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
+            final_res = self._format_tool_result(tool_name, tool_result)
+            total_duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+            if self.database:
+                try:
+                    turn_id = _run_async(
+                        self.database.save_turn(
+                            session_id=session_id,
+                            user_prompt=user_prompt,
+                            assistant_response=assistant_content or f"Executed tool {tool_name}",
+                            tool_calls=tool_calls,
+                            trace_ids=[trace_id] if trace_id else [],
+                            duration_ms=total_duration_ms,
+                            metadata={"device_id": device_id, "request_id": request_id, "confirmed": confirmed},
+                            device_id=device_id
+                        )
+                    )
+                    output_dict = tool_result.output if isinstance(tool_result.output, dict) else {"result": tool_result.output}
+                    _run_async(
+                        self.database.record_tool_execution(
+                            session_id=session_id,
+                            tool_name=tool_name,
+                            status=tool_result.status.value,
+                            duration_ms=tool_duration_ms,
+                            turn_id=turn_id,
+                            arguments=args_dict,
+                            result=output_dict,
+                            error=tool_result.error,
+                            trace_id=trace_id
+                        )
+                    )
+                    _run_async(
+                        self.database.record_audit_event(
+                            event_type="orchestrator.request_processed",
+                            payload={
+                                "request_id": request_id,
+                                "tool_name": tool_name,
+                                "success": final_res.success,
+                                "duration_ms": total_duration_ms,
+                            },
+                            correlation_id=trace_id or request_id or session_id,
+                            device_id=device_id
+                        )
+                    )
+                except Exception:
+                    pass
+
+            return final_res
         except Exception as e:
-            return AgentExecutionResult(
+            res = AgentExecutionResult(
                 success=False,
                 tool_name=tool_name,
                 output_payload={},
                 error=f"Tool execution failed: {e}"
             )
+            if self.database:
+                try:
+                    _run_async(self.database.save_turn(
+                        session_id=session_id,
+                        user_prompt=user_prompt,
+                        assistant_response=res.error,
+                        trace_ids=[trace_id] if trace_id else [],
+                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                        device_id=device_id
+                    ))
+                except Exception:
+                    pass
+            return res
 
     async def stream_request(
         self,
@@ -309,9 +447,10 @@ class IRISOrchestrator:
     ):
         """
         Stream LLM response tokens or tool execution results via ToolManager.
-        Yields StreamChunkPayload objects.
+        Yields StreamChunkPayload objects. Persists turn and tool execution details to database if bound.
         """
         session_id = session_id or str(uuid.uuid4())
+        start_time = time.perf_counter()
         tool_schemas = self._get_tool_schemas()
 
         # Build messages with optional history
@@ -322,7 +461,19 @@ class IRISOrchestrator:
             }
         ]
         if session_id:
-            messages.extend(self.session_memory.get_history(session_id))
+            if self.database:
+                try:
+                    db_turns = await self.database.get_recent_turns(session_id, limit=10)
+                    for turn in db_turns:
+                        messages.append({"role": "user", "content": turn["user_input"]})
+                        asst_msg = {"role": "assistant", "content": turn["assistant_response"]}
+                        if turn.get("metadata") and turn["metadata"].get("tool_calls"):
+                            asst_msg["tool_calls"] = turn["metadata"]["tool_calls"]
+                        messages.append(asst_msg)
+                except Exception:
+                    messages.extend(self.session_memory.get_history(session_id))
+            else:
+                messages.extend(self.session_memory.get_history(session_id))
         messages.append({"role": "user", "content": user_prompt})
 
         tools_param = [
@@ -348,6 +499,18 @@ class IRISOrchestrator:
                 stream=True,
             )
         except Exception as e:
+            if self.database:
+                try:
+                    await self.database.save_turn(
+                        session_id=session_id,
+                        user_prompt=user_prompt,
+                        assistant_response=f"Error: {e}",
+                        trace_ids=[trace_id] if trace_id else [],
+                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                        device_id=device_id
+                    )
+                except Exception:
+                    pass
             yield StreamChunkPayload(
                 chunk_type="complete",
                 delta_text=f"Error: {e}",
@@ -391,13 +554,24 @@ class IRISOrchestrator:
             ]
         self.session_memory.add_message(session_id, "assistant", assistant_content, tool_calls)
 
+        total_duration_ms = (time.perf_counter() - start_time) * 1000.0
+
         if tool_name:
             try:
                 payload_model = self._payload_models.get(tool_name)
                 if not payload_model:
+                    err_msg = f"Unknown tool: {tool_name}"
+                    if self.database:
+                        try:
+                            await self.database.save_turn(
+                                session_id, user_prompt, assistant_content or err_msg,
+                                trace_ids=[trace_id] if trace_id else [], duration_ms=total_duration_ms, device_id=device_id
+                            )
+                        except Exception:
+                            pass
                     yield StreamChunkPayload(
                         chunk_type="complete",
-                        delta_text=f"Unknown tool: {tool_name}",
+                        delta_text=err_msg,
                         session_id=session_id
                     )
                     return
@@ -409,6 +583,7 @@ class IRISOrchestrator:
                     "device_type": device_type,
                     "confirmed": confirmed,
                 }
+                tool_start = time.perf_counter()
                 tool_result: ToolResult = await self.tool_manager.execute_tool(
                     name=tool_name,
                     arguments=args_dict,
@@ -416,6 +591,7 @@ class IRISOrchestrator:
                     trace_id=trace_id,
                     context=context
                 )
+                tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
 
                 res = self._format_tool_result(tool_name, tool_result)
                 result_json = json.dumps({
@@ -424,18 +600,78 @@ class IRISOrchestrator:
                     "output_payload": res.output_payload,
                     "error": res.error
                 })
+
+                if self.database:
+                    try:
+                        turn_id = await self.database.save_turn(
+                            session_id=session_id,
+                            user_prompt=user_prompt,
+                            assistant_response=assistant_content or f"Executed tool {tool_name}",
+                            tool_calls=tool_calls,
+                            trace_ids=[trace_id] if trace_id else [],
+                            duration_ms=total_duration_ms,
+                            metadata={"device_id": device_id, "request_id": request_id, "confirmed": confirmed},
+                            device_id=device_id
+                        )
+                        output_dict = tool_result.output if isinstance(tool_result.output, dict) else {"result": tool_result.output}
+                        await self.database.record_tool_execution(
+                            session_id=session_id,
+                            tool_name=tool_name,
+                            status=tool_result.status.value,
+                            duration_ms=tool_duration_ms,
+                            turn_id=turn_id,
+                            arguments=args_dict,
+                            result=output_dict,
+                            error=tool_result.error,
+                            trace_id=trace_id
+                        )
+                        await self.database.record_audit_event(
+                            event_type="orchestrator.request_streamed",
+                            payload={"request_id": request_id, "tool_name": tool_name, "success": res.success, "duration_ms": total_duration_ms},
+                            correlation_id=trace_id or request_id or session_id,
+                            device_id=device_id
+                        )
+                    except Exception:
+                        pass
+
                 yield StreamChunkPayload(
                     chunk_type="tool_call",
                     delta_text=result_json,
                     session_id=session_id
                 )
             except Exception as e:
+                if self.database:
+                    try:
+                        await self.database.save_turn(
+                            session_id, user_prompt, assistant_content or f"Error: {e}",
+                            trace_ids=[trace_id] if trace_id else [], duration_ms=total_duration_ms, device_id=device_id
+                        )
+                    except Exception:
+                        pass
                 yield StreamChunkPayload(
                     chunk_type="complete",
                     delta_text=f"Error: {e}",
                     session_id=session_id
                 )
         else:
+            if self.database:
+                try:
+                    await self.database.save_turn(
+                        session_id=session_id,
+                        user_prompt=user_prompt,
+                        assistant_response=text_buffer,
+                        trace_ids=[trace_id] if trace_id else [],
+                        duration_ms=total_duration_ms,
+                        device_id=device_id
+                    )
+                    await self.database.record_audit_event(
+                        event_type="orchestrator.request_streamed",
+                        payload={"request_id": request_id, "text": text_buffer, "duration_ms": total_duration_ms},
+                        correlation_id=trace_id or request_id or session_id,
+                        device_id=device_id
+                    )
+                except Exception:
+                    pass
             yield StreamChunkPayload(
                 chunk_type="complete",
                 delta_text=text_buffer,

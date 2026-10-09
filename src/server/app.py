@@ -24,33 +24,48 @@ from src.health.health_checker import (
 from src.observability.health import health_supervisor, HealthState
 from src.observability.metrics import runtime_metrics
 
+from src.storage.db import Database
+
 logger = logging.getLogger("iris")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    db_path = os.getenv("DATABASE_URL", "iris.db")
+    db = Database(db_path=db_path)
+    await db.connect()
+
     api_base = os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("IRIS_API_KEY", "ollama")
     model = os.getenv("OPENAI_MODEL", "llama3.2")
 
-    orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model)
+    orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
     fleet_mgr = FleetManager()
+
+    app.state.db = db
     app.state.orchestrator = orchestrator
     app.state.tts_engine = TTSEngine()
     app.state.fleet_manager = fleet_mgr
 
+    health_supervisor.db_connection = db
     health_supervisor.orchestrator = orchestrator
     health_supervisor.fleet_manager = fleet_mgr
 
     yield
 
     # Cleanup
+    await db.close()
+    health_supervisor.db_connection = None
     if hasattr(app.state, "orchestrator"):
         del app.state.orchestrator
     if hasattr(app.state, "fleet_manager"):
         del app.state.fleet_manager
+    if hasattr(app.state, "db"):
+        del app.state.db
+
 
 app = FastAPI(lifespan=lifespan)
+
 app.include_router(fleet_router)
 
 @app.get("/health")
@@ -182,15 +197,18 @@ async def health_live():
 async def liveness():
     return {"status": "alive"}
 
+from fastapi.responses import JSONResponse
+
 @app.get("/health/ready")
 @app.get("/health/readiness")
 async def readiness():
     report = await health_supervisor.get_health_status(check_readiness=True)
     if report.status == HealthState.UNHEALTHY:
-        return {"status": "unhealthy", "report": report.model_dump()}, 503
+        return JSONResponse(status_code=503, content={"status": "unhealthy", "report": report.model_dump()})
     elif report.status == HealthState.DEGRADED:
-        return {"status": "degraded", "report": report.model_dump()}
+        return JSONResponse(status_code=200, content={"status": "degraded", "report": report.model_dump()})
     return {"status": "ready", "report": report.model_dump()}
+
 
 @app.get("/health/detailed", response_model=SystemHealthReport)
 async def detailed_health():
