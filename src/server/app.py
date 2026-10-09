@@ -21,6 +21,9 @@ from src.health.health_checker import (
     SystemHealthReport,
 )
 
+from src.observability.health import health_supervisor, HealthState
+from src.observability.metrics import runtime_metrics
+
 logger = logging.getLogger("iris")
 
 @asynccontextmanager
@@ -31,9 +34,13 @@ async def lifespan(app: FastAPI):
     model = os.getenv("OPENAI_MODEL", "llama3.2")
 
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model)
+    fleet_mgr = FleetManager()
     app.state.orchestrator = orchestrator
     app.state.tts_engine = TTSEngine()
-    app.state.fleet_manager = FleetManager()
+    app.state.fleet_manager = fleet_mgr
+
+    health_supervisor.orchestrator = orchestrator
+    health_supervisor.fleet_manager = fleet_mgr
 
     yield
 
@@ -166,18 +173,29 @@ async def websocket_stream(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
 
+@app.get("/health/live")
+async def health_live():
+    report = await health_supervisor.get_health_status(check_readiness=False)
+    return {"status": "alive", "report": report.model_dump()}
 
 @app.get("/health/liveness")
 async def liveness():
     return {"status": "alive"}
 
+@app.get("/health/ready")
 @app.get("/health/readiness")
 async def readiness():
-    report = await health_checker.evaluate_system()
-    if report.status == HealthStatus.UNHEALTHY:
-        return {"status": "degraded", "report": report.model_dump()}, 503
+    report = await health_supervisor.get_health_status(check_readiness=True)
+    if report.status == HealthState.UNHEALTHY:
+        return {"status": "unhealthy", "report": report.model_dump()}, 503
+    elif report.status == HealthState.DEGRADED:
+        return {"status": "degraded", "report": report.model_dump()}
     return {"status": "ready", "report": report.model_dump()}
 
 @app.get("/health/detailed", response_model=SystemHealthReport)
 async def detailed_health():
     return await health_checker.evaluate_system()
+
+@app.get("/metrics")
+async def metrics():
+    return runtime_metrics.get_metrics_snapshot()
