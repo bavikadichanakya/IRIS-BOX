@@ -38,12 +38,21 @@ class InboundCancelPayload(BaseModel):
     request_id: Optional[str] = None
 
 
+class InboundCommandAckPayload(BaseModel):
+    type: Literal["command_ack"] = "command_ack"
+    command_id: str
+    status: str = "OK"  # "OK" or "ERROR"
+    error: Optional[str] = None
+    output: Optional[Dict[str, Any]] = None
+
+
 InboundMessage = Union[
     InboundConnectPayload,
     InboundAudioFramePayload,
     InboundTextInputPayload,
     InboundPingPayload,
     InboundCancelPayload,
+    InboundCommandAckPayload,
 ]
 
 
@@ -101,6 +110,13 @@ class OutboundTurnCompletePayload(BaseModel):
     duration_ms: float = 0.0
 
 
+class OutboundDeviceCommandPayload(BaseModel):
+    type: Literal["device_command"] = "device_command"
+    command_id: str
+    action: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
 class OutboundErrorPayload(BaseModel):
     type: Literal["error"] = "error"
     code: str
@@ -124,5 +140,7 @@ def parse_inbound_message(data: Dict[str, Any]) -> InboundMessage:
         return InboundPingPayload(**data)
     elif msg_type == "cancel":
         return InboundCancelPayload(**data)
+    elif msg_type == "command_ack":
+        return InboundCommandAckPayload(**data)
     else:
         raise ValueError(f"Unknown inbound message type: '{msg_type}'")

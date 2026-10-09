@@ -38,6 +38,7 @@ from src.server.protocol import (
     InboundTextInputPayload,
     InboundPingPayload,
     InboundCancelPayload,
+    InboundCommandAckPayload,
     OutboundConnectedPayload,
     OutboundPongPayload,
     OutboundVADPayload,
@@ -64,7 +65,7 @@ async def lifespan(app: FastAPI):
     model = os.getenv("OPENAI_MODEL", "llama3.2")
 
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
-    fleet_mgr = FleetManager()
+    fleet_mgr = FleetManager(ws_manager=ws_manager, event_bus=orchestrator.event_bus)
     tts_eng = TTSEngine()
     voice_pipe = VoicePipeline(orchestrator=orchestrator, tts=tts_eng)
 
@@ -101,6 +102,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(fleet_router)
+app.include_router(fleet_router, prefix="/api")
 
 @app.get("/health")
 async def health():
@@ -165,6 +167,11 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                 elif isinstance(msg, InboundCancelPayload):
                     count = ws_mgr.cancel_tasks_sync(sess_id)
                     logger.info(f"Cancelled {count} tasks for session {sess_id} via cancel message.")
+
+                elif isinstance(msg, InboundCommandAckPayload):
+                    fleet_mgr = getattr(websocket.app.state, "fleet_manager", None)
+                    if fleet_mgr:
+                        fleet_mgr.handle_command_ack(msg)
 
                 elif isinstance(msg, InboundTextInputPayload):
                     request_id = str(uuid.uuid4())
