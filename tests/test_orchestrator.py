@@ -98,23 +98,72 @@ class TestIRISOrchestrator(unittest.TestCase):
         self.assertIn("Failed to parse function arguments", result.error)
 
     @patch('openai.OpenAI')
-    def test_process_request_tool_not_found(self, mock_openai):
+    def test_process_request_protected_tool_policy(self, mock_openai):
+        class DummyHomePayload(BaseModel):
+            entity_id: str
+
+        class HomeAssistantTool(BaseTool):
+            def execute(self, payload: DummyHomePayload) -> AgentExecutionResult:
+                return AgentExecutionResult(success=True, tool_name="HomeAssistantTool", output_payload={"status": "ok"})
+
+        ToolRegistry._tool_classes["HomeAssistantTool"] = HomeAssistantTool
+
         mock_client = MagicMock()
         mock_openai.return_value = mock_client
         mock_response = MagicMock()
         mock_message = MagicMock()
         mock_function_call = MagicMock()
-        mock_function_call.name = "NonExistentTool"
-        mock_function_call.arguments = json.dumps({})
+        mock_function_call.name = "HomeAssistantTool"
+        mock_function_call.arguments = json.dumps({"entity_id": "light.living_room"})
         mock_message.function_call = mock_function_call
         mock_response.choices = [MagicMock(message=mock_message)]
         mock_client.chat.completions.create.return_value = mock_response
 
         orchestrator = IRISOrchestrator(api_base="http://mock", api_key="mock")
-        result = orchestrator.process_request("test prompt")
 
-        self.assertFalse(result.success)
-        self.assertIn("Unknown tool", result.error)
+        # 1. Reject when device_id is unknown/missing
+        res_denied = orchestrator.process_request("turn on light", device_id="unknown")
+        self.assertFalse(res_denied.success)
+        self.assertIn("requires a verified device_id", res_denied.error)
+
+        # 2. Allow when device_id is verified
+        res_allowed = orchestrator.process_request("turn on light", device_id="device-123")
+        self.assertTrue(res_allowed.success)
+        self.assertEqual(res_allowed.output_payload, {"status": "ok"})
+
+    @patch('openai.OpenAI')
+    def test_process_request_sensitive_tool_policy(self, mock_openai):
+        class DummySysPayload(BaseModel):
+            command: str
+
+        class SystemCommandTool(BaseTool):
+            def execute(self, payload: DummySysPayload) -> AgentExecutionResult:
+                return AgentExecutionResult(success=True, tool_name="SystemCommandTool", output_payload={"stdout": "hello"})
+
+        ToolRegistry._tool_classes["SystemCommandTool"] = SystemCommandTool
+
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_response = MagicMock()
+        mock_message = MagicMock()
+        mock_function_call = MagicMock()
+        mock_function_call.name = "SystemCommandTool"
+        mock_function_call.arguments = json.dumps({"command": "echo hello"})
+        mock_message.function_call = mock_function_call
+        mock_response.choices = [MagicMock(message=mock_message)]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        orchestrator = IRISOrchestrator(api_base="http://mock", api_key="mock")
+
+        # 1. Denied when confirmed is False
+        res_denied = orchestrator.process_request("echo hello", confirmed=False)
+        self.assertFalse(res_denied.success)
+        self.assertIn("CONFIRMATION_REQUIRED", res_denied.error)
+
+        # 2. Allowed when confirmed is True
+        res_allowed = orchestrator.process_request("echo hello", confirmed=True)
+        self.assertTrue(res_allowed.success)
+        self.assertEqual(res_allowed.output_payload, {"stdout": "hello"})
 
 
 if __name__ == '__main__':

@@ -1,13 +1,31 @@
+import asyncio
+import concurrent.futures
 import inspect
 import json
 import uuid
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, Union
 
 import openai
 from pydantic import BaseModel
 
 from src.models.schemas import AgentExecutionResult, StreamChunkPayload
 from src.tools.registry import BaseTool, ToolRegistry
+from src.tools.manager import ToolManager
+from src.tools.capability import ToolResult, ExecutionStatus
+from src.observability.event_bus import EventBus
+
+
+def _run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(lambda: asyncio.run(coro)).result()
+    else:
+        return asyncio.run(coro)
 
 
 class SessionMemory:
@@ -36,11 +54,25 @@ class SessionMemory:
 class IRISOrchestrator:
     """
     Orchestrates LLM interactions with function and tool calling to execute actions.
+    Uses ToolManager for policy enforcement, timeout management, and safe execution.
     """
-    def __init__(self, api_base: str, api_key: str, model: str = "dots-studio/dots-3-note-preview:free"):
+    def __init__(
+        self,
+        api_base: str,
+        api_key: str,
+        model: str = "dots-studio/dots-3-note-preview:free",
+        tool_registry: Optional[Union[Type[ToolRegistry], ToolRegistry]] = None,
+        event_bus: Optional[EventBus] = None,
+        tool_manager: Optional[ToolManager] = None,
+    ):
         self.client = openai.OpenAI(base_url=api_base, api_key=api_key)
         self.model = model
-        self.tool_registry = ToolRegistry
+        self.tool_registry = tool_registry or ToolRegistry
+        self.event_bus = event_bus or EventBus()
+        self.tool_manager = tool_manager or ToolManager(
+            registry=self.tool_registry,
+            event_bus=self.event_bus
+        )
         self._tool_schemas: Optional[List[Dict]] = None
         self._payload_models: Dict[str, Type[BaseModel]] = {}
         self.session_memory = SessionMemory()
@@ -55,7 +87,8 @@ class IRISOrchestrator:
 
         tools = []
         self._payload_models = {}
-        for name, tool_class in self.tool_registry._tool_classes.items():
+        tool_classes = getattr(self.tool_registry, "_tool_classes", {})
+        for name, tool_class in tool_classes.items():
             sig = inspect.signature(tool_class.execute)
             params = list(sig.parameters.values())
             if len(params) < 2:
@@ -92,9 +125,51 @@ class IRISOrchestrator:
         self._tool_schemas = tools
         return tools
 
-    def process_request(self, user_prompt: str, session_id: Optional[str] = None) -> AgentExecutionResult:
+    def _format_tool_result(self, tool_name: str, tool_result: ToolResult) -> AgentExecutionResult:
+        if tool_result.status == ExecutionStatus.SUCCEEDED:
+            if isinstance(tool_result.output, AgentExecutionResult):
+                return tool_result.output
+            output_dict = tool_result.output if isinstance(tool_result.output, dict) else {"result": tool_result.output}
+            return AgentExecutionResult(
+                success=True,
+                tool_name=tool_name,
+                output_payload=output_dict,
+                error=None
+            )
+        elif tool_result.status in (ExecutionStatus.DENIED, ExecutionStatus.UNAVAILABLE):
+            return AgentExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                output_payload={},
+                error=tool_result.error or f"Tool '{tool_name}' execution was {tool_result.status.value.lower()}."
+            )
+        elif tool_result.status == ExecutionStatus.TIMEOUT:
+            return AgentExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                output_payload={},
+                error=tool_result.error or f"Tool '{tool_name}' execution timed out."
+            )
+        else:
+            return AgentExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                output_payload={},
+                error=tool_result.error or f"Tool '{tool_name}' execution failed."
+            )
+
+    def process_request(
+        self,
+        user_prompt: str,
+        session_id: Optional[str] = None,
+        device_id: str = "unknown",
+        device_type: str = "pod",
+        request_id: str = "",
+        trace_id: str = "",
+        confirmed: bool = False,
+    ) -> AgentExecutionResult:
         """
-        Process a user request by calling the LLM and executing the tool if returned.
+        Process a user request by calling the LLM and executing the tool via ToolManager.
         """
         tool_schemas = self._get_tool_schemas()
 
@@ -145,7 +220,6 @@ class IRISOrchestrator:
             assistant_content = message.content or ""
             tool_calls = None
             if getattr(message, "tool_calls", None):
-                # serialize tool calls for storage
                 tool_calls = [
                     {
                         "id": call.id,
@@ -198,10 +272,23 @@ class IRISOrchestrator:
                 error=f"Failed to parse function arguments: {e}"
             )
 
+        context = {
+            "device_id": device_id,
+            "device_type": device_type,
+            "confirmed": confirmed,
+        }
+
         try:
-            tool = self.tool_registry.get_tool(tool_name)
-            result = tool.execute(payload)
-            return result
+            tool_result: ToolResult = _run_async(
+                self.tool_manager.execute_tool(
+                    name=tool_name,
+                    arguments=args_dict,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    context=context
+                )
+            )
+            return self._format_tool_result(tool_name, tool_result)
         except Exception as e:
             return AgentExecutionResult(
                 success=False,
@@ -210,9 +297,18 @@ class IRISOrchestrator:
                 error=f"Tool execution failed: {e}"
             )
 
-    async def stream_request(self, user_prompt: str, session_id: Optional[str] = None):
+    async def stream_request(
+        self,
+        user_prompt: str,
+        session_id: Optional[str] = None,
+        device_id: str = "unknown",
+        device_type: str = "pod",
+        request_id: str = "",
+        trace_id: str = "",
+        confirmed: bool = False,
+    ):
         """
-        Stream LLM response tokens or tool execution results.
+        Stream LLM response tokens or tool execution results via ToolManager.
         Yields StreamChunkPayload objects.
         """
         session_id = session_id or str(uuid.uuid4())
@@ -307,14 +403,26 @@ class IRISOrchestrator:
                     return
                 args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 payload = payload_model(**args_dict)
-                tool = self.tool_registry.get_tool(tool_name)
-                result = tool.execute(payload)
-                # Encode result as JSON string in delta_text
+
+                context = {
+                    "device_id": device_id,
+                    "device_type": device_type,
+                    "confirmed": confirmed,
+                }
+                tool_result: ToolResult = await self.tool_manager.execute_tool(
+                    name=tool_name,
+                    arguments=args_dict,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    context=context
+                )
+
+                res = self._format_tool_result(tool_name, tool_result)
                 result_json = json.dumps({
                     "tool_name": tool_name,
-                    "success": result.success,
-                    "output_payload": result.output_payload,
-                    "error": result.error
+                    "success": res.success,
+                    "output_payload": res.output_payload,
+                    "error": res.error
                 })
                 yield StreamChunkPayload(
                     chunk_type="tool_call",
@@ -333,3 +441,7 @@ class IRISOrchestrator:
                 delta_text=text_buffer,
                 session_id=session_id
             )
+
+
+AgentOrchestrator = IRISOrchestrator
+

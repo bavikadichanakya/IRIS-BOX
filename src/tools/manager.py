@@ -1,7 +1,8 @@
+import inspect
 import asyncio
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union, Type
 from src.tools.capability import Capability, ToolResult, ExecutionStatus, PermissionLevel
 from src.tools.permissions import PermissionManager
 from src.tools.registry import ToolRegistry
@@ -18,11 +19,12 @@ class ToolManager:
 
     def __init__(
         self,
-        registry: Optional[ToolRegistry] = None,
+        registry: Optional[Union[ToolRegistry, Type[ToolRegistry]]] = None,
         permission_manager: Optional[PermissionManager] = None,
         event_bus: Optional[EventBus] = None
     ):
-        self.registry = registry or ToolRegistry()
+        reg = registry or ToolRegistry
+        self.registry = reg() if inspect.isclass(reg) else reg
         self.permission_manager = permission_manager or PermissionManager()
         self.event_bus = event_bus or EventBus()
         self._capabilities: Dict[str, Capability] = {}
@@ -57,6 +59,8 @@ class ToolManager:
         self._capabilities[capability.name] = capability
 
     def get_capability(self, name: str) -> Optional[Capability]:
+        if name not in self._capabilities:
+            self._initialize_capabilities()
         return self._capabilities.get(name)
 
     def get_schemas(self):
@@ -72,6 +76,9 @@ class ToolManager:
     ) -> ToolResult:
         start_time = time.perf_counter()
         capability = self._capabilities.get(name)
+        if not capability:
+            self._initialize_capabilities()
+            capability = self._capabilities.get(name)
         trace_ctx = TraceContext(request_id=request_id or "", trace_id=trace_id or "")
         await self.event_bus.publish("tool.execution.started", {"tool": name, "args": arguments}, trace=trace_ctx)
 

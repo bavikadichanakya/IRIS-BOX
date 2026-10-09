@@ -19,14 +19,19 @@ class ReActLoop:
         self,
         tool_name: str,
         arguments: Dict[str, Any],
-        trace_context: Optional[TraceContext] = None
+        trace_context: Optional[TraceContext] = None,
+        context: Optional[Dict[str, Any]] = None
     ) -> ToolResult:
         trace = trace_context or TraceContext()
+        ctx = dict(context or {})
+        if "device_id" not in ctx and trace.device_id:
+            ctx["device_id"] = trace.device_id
         return await self.tool_manager.execute_tool(
             name=tool_name,
             arguments=arguments,
             request_id=trace.request_id,
-            trace_id=trace.trace_id
+            trace_id=trace.trace_id,
+            context=ctx
         )
 
     def format_tool_feedback(self, tool_name: str, result: ToolResult) -> Dict[str, Any]:

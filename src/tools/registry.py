@@ -1,9 +1,12 @@
+import asyncio
 import functools
+import inspect
 import os
 import subprocess
 from typing import Callable, Dict, Any, Type, List
 
 import requests
+from pydantic import BaseModel
 
 from src.models.schemas import (
     SmartHomeAction,
@@ -59,6 +62,66 @@ class ToolRegistry:
         Lists the names of all registered tools.
         """
         return list(cls._tool_classes.keys())
+
+    @classmethod
+    def get_schemas(cls) -> List[Dict[str, Any]]:
+        """
+        Returns a list of tool schema dictionaries for all registered tools.
+        """
+        schemas = []
+        for name, tool_class in cls._tool_classes.items():
+            sig = inspect.signature(tool_class.execute)
+            params = list(sig.parameters.values())
+            if len(params) < 2:
+                continue
+            payload_param = params[1]
+            payload_type = payload_param.annotation
+            if isinstance(payload_type, type) and issubclass(payload_type, BaseModel):
+                schema = payload_type.model_json_schema()
+                description = tool_class.__doc__ or f"Execute {name} action"
+                schemas.append({
+                    "name": name,
+                    "description": description.strip(),
+                    "parameters": {
+                        "type": "object",
+                        "properties": schema.get("properties", {}),
+                        "required": schema.get("required", []),
+                    },
+                    "category": getattr(tool_class, "category", "general")
+                })
+        return schemas
+
+    @classmethod
+    async def execute(cls, name: str, arguments: Dict[str, Any]) -> Any:
+        """
+        Executes a registered tool by name with arguments.
+        """
+        tool_class = cls._tool_classes.get(name)
+        if not tool_class:
+            raise ValueError(f"Tool '{name}' not found in registry.")
+
+        sig = inspect.signature(tool_class.execute)
+        params = list(sig.parameters.values())
+        if len(params) >= 2:
+            payload_param = params[1]
+            payload_type = payload_param.annotation
+            if isinstance(arguments, payload_type):
+                payload = arguments
+            elif isinstance(arguments, dict) and isinstance(payload_type, type) and issubclass(payload_type, BaseModel):
+                payload = payload_type(**arguments)
+            else:
+                payload = arguments
+        else:
+            payload = arguments
+
+        tool = cls.get_tool(name)
+        if hasattr(tool, "execute_async") and callable(getattr(tool, "execute_async")):
+            res = await tool.execute_async(payload)
+        else:
+            res = tool.execute(payload)
+            if inspect.isawaitable(res):
+                res = await res
+        return res
 
 
 @ToolRegistry.register_tool("HomeAssistantTool")
