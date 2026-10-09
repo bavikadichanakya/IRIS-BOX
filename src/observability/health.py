@@ -99,19 +99,46 @@ class HealthSupervisor:
                 message="Orchestrator instance not bound"
             )
         try:
+            resilient_provider = getattr(self.orchestrator, "resilient_provider", None)
+            cb_state = getattr(resilient_provider, "state", "CLOSED")
+            if hasattr(cb_state, "value"):
+                cb_state = cb_state.value
+            else:
+                cb_state = str(cb_state)
+
+            elapsed = (time.perf_counter() - start) * 1000.0
+            details = {
+                "model": getattr(self.orchestrator, "model", "unknown"),
+                "base_url": str(getattr(self.orchestrator.client, "base_url", "")),
+                "circuit_breaker_state": cb_state,
+            }
+
+            if cb_state == "OPEN":
+                return SubsystemHealth(
+                    name="llm_provider",
+                    status=HealthState.UNHEALTHY,
+                    latency_ms=elapsed,
+                    details=details,
+                    message="Circuit breaker is OPEN - LLM provider unavailable"
+                )
+            elif cb_state == "HALF_OPEN":
+                return SubsystemHealth(
+                    name="llm_provider",
+                    status=HealthState.DEGRADED,
+                    latency_ms=elapsed,
+                    details=details,
+                    message="Circuit breaker is HALF_OPEN - Probing provider health"
+                )
+
             if hasattr(self.orchestrator, "client") and self.orchestrator.client:
-                elapsed = (time.perf_counter() - start) * 1000.0
                 return SubsystemHealth(
                     name="llm_provider",
                     status=HealthState.HEALTHY,
                     latency_ms=elapsed,
-                    details={
-                        "model": getattr(self.orchestrator, "model", "unknown"),
-                        "base_url": str(getattr(self.orchestrator.client, "base_url", ""))
-                    },
-                    message="LLM provider client configured"
+                    details=details,
+                    message="LLM provider client configured and healthy"
                 )
-            return SubsystemHealth(name="llm_provider", status=HealthState.DEGRADED, message="LLM client unconfigured")
+            return SubsystemHealth(name="llm_provider", status=HealthState.DEGRADED, details=details, message="LLM client unconfigured")
         except Exception as e:
             elapsed = (time.perf_counter() - start) * 1000.0
             return SubsystemHealth(name="llm_provider", status=HealthState.DEGRADED, latency_ms=elapsed, message=str(e))

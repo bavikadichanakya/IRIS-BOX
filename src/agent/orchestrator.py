@@ -2,9 +2,12 @@ import asyncio
 import concurrent.futures
 import inspect
 import json
+import logging
 import time
 import uuid
 from typing import Dict, List, Optional, Type, Union
+
+logger = logging.getLogger("iris.orchestrator")
 
 import openai
 from pydantic import BaseModel
@@ -15,6 +18,7 @@ from src.tools.manager import ToolManager
 from src.tools.capability import ToolResult, ExecutionStatus
 from src.observability.event_bus import EventBus
 from src.storage.db import Database
+from src.agent.recovery import ResilientLLMProvider, CircuitState, ProviderUnavailableError
 
 
 def _run_async(coro):
@@ -58,6 +62,7 @@ class IRISOrchestrator:
     Orchestrates LLM interactions with function and tool calling to execute actions.
     Uses ToolManager for policy enforcement, timeout management, and safe execution.
     Persists sessions, turns, tool execution outcomes, and audit logs to Database.
+    Integrated with ResilientLLMProvider for exponential backoff, circuit breaking, and generation tracking.
     """
     def __init__(
         self,
@@ -68,6 +73,7 @@ class IRISOrchestrator:
         event_bus: Optional[EventBus] = None,
         tool_manager: Optional[ToolManager] = None,
         database: Optional[Database] = None,
+        resilient_provider: Optional[ResilientLLMProvider] = None,
     ):
         self.client = openai.OpenAI(base_url=api_base, api_key=api_key)
         self.model = model
@@ -78,6 +84,7 @@ class IRISOrchestrator:
             event_bus=self.event_bus
         )
         self.database = database
+        self.resilient_provider = resilient_provider or ResilientLLMProvider(event_bus=self.event_bus)
         self._tool_schemas: Optional[List[Dict]] = None
         self._payload_models: Dict[str, Type[BaseModel]] = {}
         self.session_memory = SessionMemory()
@@ -215,12 +222,20 @@ class IRISOrchestrator:
             for s in tool_schemas
         ]
 
-        try:
-            response = self.client.chat.completions.create(
+        def _call_completion():
+            return self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=tools_param if tools_param else None,
                 tool_choice="auto" if tools_param else None,
+            )
+
+        try:
+            response = self.resilient_provider.execute_with_recovery_sync(
+                _call_completion,
+                request_id=request_id or session_id or "",
+                trace_id=trace_id or "",
+                device_id=device_id or ""
             )
         except Exception as e:
             res = AgentExecutionResult(
@@ -490,13 +505,21 @@ class IRISOrchestrator:
 
         async_client = openai.AsyncOpenAI(base_url=self.client.base_url, api_key=self.client.api_key)
 
-        try:
-            stream = await async_client.chat.completions.create(
+        async def _create_stream():
+            return await async_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=tools_param if tools_param else None,
                 tool_choice="auto" if tools_param else None,
                 stream=True,
+            )
+
+        try:
+            stream = self.resilient_provider.stream_with_recovery(
+                _create_stream,
+                request_id=request_id or session_id or "",
+                trace_id=trace_id or "",
+                device_id=device_id or ""
             )
         except Exception as e:
             if self.database:
@@ -522,21 +545,42 @@ class IRISOrchestrator:
         raw_args = ""
         text_buffer = ""
 
-        async for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta.content:
-                text_buffer += delta.content
-                yield StreamChunkPayload(
-                    chunk_type="text_delta",
-                    delta_text=delta.content,
-                    session_id=session_id
-                )
-            if delta.tool_calls:
-                for call in delta.tool_calls:
-                    if call.function.name:
-                        tool_name = call.function.name
-                    if call.function.arguments:
-                        raw_args += call.function.arguments
+        try:
+            async for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    text_buffer += delta.content
+                    yield StreamChunkPayload(
+                        chunk_type="text_delta",
+                        delta_text=delta.content,
+                        session_id=session_id
+                    )
+                if delta.tool_calls:
+                    for call in delta.tool_calls:
+                        if call.function.name:
+                            tool_name = call.function.name
+                        if call.function.arguments:
+                            raw_args += call.function.arguments
+        except Exception as e:
+            logger.error(f"Error during LLM streaming: {e}")
+            if self.database:
+                try:
+                    await self.database.save_turn(
+                        session_id=session_id,
+                        user_prompt=user_prompt,
+                        assistant_response=f"Error: {e}",
+                        trace_ids=[trace_id] if trace_id else [],
+                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                        device_id=device_id
+                    )
+                except Exception:
+                    pass
+            yield StreamChunkPayload(
+                chunk_type="complete",
+                delta_text=f"Error: {e}",
+                session_id=session_id
+            )
+            return
 
         # Persist user and assistant messages
         self.session_memory.add_message(session_id, "user", user_prompt)
