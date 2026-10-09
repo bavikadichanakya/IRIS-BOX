@@ -80,16 +80,33 @@ class ToolManager:
             self._initialize_capabilities()
             capability = self._capabilities.get(name)
         trace_ctx = TraceContext(request_id=request_id or "", trace_id=trace_id or "")
+        ctx_data = context or {}
         await self.event_bus.publish("tool.execution.started", {"tool": name, "args": arguments}, trace=trace_ctx)
+        await self.event_bus.publish("tool.invoked", {
+            "tool_name": name,
+            "request_id": request_id,
+            "trace_id": trace_id,
+            "context": ctx_data,
+            "arguments": arguments,
+            "capability": capability.name if capability else name
+        }, trace=trace_ctx)
 
         if not capability:
             duration_ms = (time.perf_counter() - start_time) * 1000.0
+            error_msg = f"Capability '{name}' is not registered or unavailable."
+            await self.event_bus.publish("tool.failed", {
+                "tool_name": name,
+                "status": ExecutionStatus.UNAVAILABLE.value,
+                "duration_ms": duration_ms,
+                "error": error_msg,
+                "context": ctx_data
+            }, trace=trace_ctx)
             return ToolResult(
                 status=ExecutionStatus.UNAVAILABLE,
                 tool_name=name,
                 request_id=request_id,
                 trace_id=trace_id,
-                error=f"Capability '{name}' is not registered or unavailable.",
+                error=error_msg,
                 duration_ms=duration_ms
             )
 
@@ -97,13 +114,21 @@ class ToolManager:
         allowed, reason = await self.permission_manager.evaluate(capability, context)
         if not allowed:
             duration_ms = (time.perf_counter() - start_time) * 1000.0
+            error_reason = reason or "Action denied by permission policy."
             await self.event_bus.publish("tool.execution.denied", {"tool": name, "reason": reason}, trace=trace_ctx)
+            await self.event_bus.publish("tool.denied", {
+                "tool_name": name,
+                "status": ExecutionStatus.DENIED.value,
+                "duration_ms": duration_ms,
+                "error": error_reason,
+                "context": ctx_data
+            }, trace=trace_ctx)
             return ToolResult(
                 status=ExecutionStatus.DENIED,
                 tool_name=name,
                 request_id=request_id,
                 trace_id=trace_id,
-                error=reason or "Action denied by permission policy.",
+                error=error_reason,
                 duration_ms=duration_ms
             )
 
@@ -115,6 +140,14 @@ class ToolManager:
             )
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             await self.event_bus.publish("tool.execution.succeeded", {"tool": name, "duration_ms": duration_ms}, trace=trace_ctx)
+            await self.event_bus.publish("tool.completed", {
+                "tool_name": name,
+                "status": ExecutionStatus.SUCCEEDED.value,
+                "duration_ms": duration_ms,
+                "output": output,
+                "error": None,
+                "context": ctx_data
+            }, trace=trace_ctx)
             return ToolResult(
                 status=ExecutionStatus.SUCCEEDED,
                 tool_name=name,
@@ -125,25 +158,41 @@ class ToolManager:
             )
         except asyncio.TimeoutError:
             duration_ms = (time.perf_counter() - start_time) * 1000.0
+            error_msg = f"Execution timed out after {capability.execution_timeout_sec}s"
             logger.error(f"Tool execution timed out: {name} ({capability.execution_timeout_sec}s)")
             await self.event_bus.publish("tool.execution.timeout", {"tool": name, "duration_ms": duration_ms}, trace=trace_ctx)
+            await self.event_bus.publish("tool.failed", {
+                "tool_name": name,
+                "status": ExecutionStatus.TIMEOUT.value,
+                "duration_ms": duration_ms,
+                "error": error_msg,
+                "context": ctx_data
+            }, trace=trace_ctx)
             return ToolResult(
                 status=ExecutionStatus.TIMEOUT,
                 tool_name=name,
                 request_id=request_id,
                 trace_id=trace_id,
-                error=f"Execution timed out after {capability.execution_timeout_sec}s",
+                error=error_msg,
                 duration_ms=duration_ms
             )
         except Exception as exc:
             duration_ms = (time.perf_counter() - start_time) * 1000.0
+            error_msg = str(exc)
             logger.error(f"Tool execution failed: {name} -> {exc}", exc_info=True)
-            await self.event_bus.publish("tool.execution.failed", {"tool": name, "error": str(exc)}, trace=trace_ctx)
+            await self.event_bus.publish("tool.execution.failed", {"tool": name, "error": error_msg}, trace=trace_ctx)
+            await self.event_bus.publish("tool.failed", {
+                "tool_name": name,
+                "status": ExecutionStatus.FAILED.value,
+                "duration_ms": duration_ms,
+                "error": error_msg,
+                "context": ctx_data
+            }, trace=trace_ctx)
             return ToolResult(
                 status=ExecutionStatus.FAILED,
                 tool_name=name,
                 request_id=request_id,
                 trace_id=trace_id,
-                error=str(exc),
+                error=error_msg,
                 duration_ms=duration_ms
             )

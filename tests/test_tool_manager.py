@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from src.tools.capability import Capability, ExecutionStatus, PermissionLevel
@@ -80,3 +80,54 @@ async def test_tool_manager_unavailable():
 
     res = await tm.execute_tool(name="NonExistentTool", arguments={})
     assert res.status == ExecutionStatus.UNAVAILABLE
+
+@pytest.mark.asyncio
+async def test_tool_manager_audit_telemetry():
+    from src.observability.event_bus import EventBus
+    bus = EventBus()
+    events = []
+    bus.subscribe("*", lambda evt: events.append(evt))
+
+    registry = MockRegistry()
+    registry.execute.return_value = {"res": "ok"}
+    tm = ToolManager(registry=registry, event_bus=bus)
+
+    res = await tm.execute_tool(
+        name="EchoTool",
+        arguments={"msg": "test"},
+        request_id="req-99",
+        trace_id="tr-99",
+        context={"device_id": "pod-101"}
+    )
+    assert res.status == ExecutionStatus.SUCCEEDED
+
+    topics = [e.topic for e in events]
+    assert "tool.invoked" in topics
+    assert "tool.completed" in topics
+
+    invoked_evt = next(e for e in events if e.topic == "tool.invoked")
+    assert invoked_evt.payload["tool_name"] == "EchoTool"
+    assert invoked_evt.payload["request_id"] == "req-99"
+    assert invoked_evt.payload["context"]["device_id"] == "pod-101"
+
+    completed_evt = next(e for e in events if e.topic == "tool.completed")
+    assert completed_evt.payload["status"] == "SUCCEEDED"
+    assert completed_evt.payload["output"] == {"res": "ok"}
+
+@pytest.mark.asyncio
+async def test_tool_manager_register_capability_runtime():
+    registry = MockRegistry()
+    tm = ToolManager(registry=registry)
+
+    cap = Capability(
+        name="DynamicTool",
+        description="Runtime registered capability",
+        permission_level=PermissionLevel.PUBLIC
+    )
+    tm.register_capability(cap)
+
+    fetched = tm.get_capability("DynamicTool")
+    assert fetched is not None
+    assert fetched.name == "DynamicTool"
+    assert fetched.permission_level == PermissionLevel.PUBLIC
+
