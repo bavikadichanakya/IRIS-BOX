@@ -46,7 +46,7 @@ def validate_audio_header(audio_bytes: bytes, expected_sample_rate: int = 16000)
 class Transcriber:
     """Offline Whisper-compatible STT processor with explicit status reporting."""
 
-    def __init__(self, model_name: str = "base", device: str = "cpu", fallback_mock: bool = True):
+    def __init__(self, model_name: str = "base", device: str = "cpu", fallback_mock: bool = False):
         self.model_name = model_name
         self.device = device
         self.fallback_mock = fallback_mock
@@ -74,7 +74,7 @@ class Transcriber:
                 self.mock_mode = True
                 logger.info("Falling back to mock STT mode")
             else:
-                raise RuntimeError(f"STT model initialization failed: {e}")
+                self.mock_mode = False
 
     def transcribe_pcm(self, audio_bytes: bytes, sample_rate: int = 16000) -> str:
         """Transcribe PCM audio bytes to text."""

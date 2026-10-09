@@ -201,6 +201,17 @@ class SystemCommandTool(BaseTool):
     }
 
     def execute(self, action_payload: LaptopSystemAction) -> AgentExecutionResult:
+        from src.security.policy import validate_system_command
+        
+        valid, reason = validate_system_command(action_payload.command, list(self._ALLOWED_COMMANDS))
+        if not valid:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="SystemCommandTool",
+                output_payload={},
+                error=f"SECURITY_DENIED: {reason}",
+            )
+
         command_parts = action_payload.command.split(maxsplit=1)
         base_command = command_parts[0]
 
@@ -266,6 +277,18 @@ class BrowserTool(BaseTool):
         self.headless = headless
 
     def execute(self, action_payload: BrowserAction) -> AgentExecutionResult:
+        from src.security.policy import is_url_allowed
+
+        if action_payload.url:
+            allowed, reason = is_url_allowed(action_payload.url)
+            if not allowed:
+                return AgentExecutionResult(
+                    success=False,
+                    tool_name="BrowserTool",
+                    output_payload={},
+                    error=f"SSRF_BLOCKED: {reason}"
+                )
+
         return self._execute_fallback(action_payload)
 
     def _execute_fallback(self, action_payload: BrowserAction) -> AgentExecutionResult:
@@ -294,6 +317,17 @@ class BrowserTool(BaseTool):
         )
 
     async def execute_async(self, action_payload: BrowserAction) -> AgentExecutionResult:
+        from src.security.policy import is_url_allowed
+
+        if action_payload.url:
+            allowed, reason = is_url_allowed(action_payload.url)
+            if not allowed:
+                return AgentExecutionResult(
+                    success=False,
+                    tool_name="BrowserTool",
+                    output_payload={},
+                    error=f"SSRF_BLOCKED: {reason}"
+                )
         try:
             from playwright.async_api import async_playwright
         except ImportError:

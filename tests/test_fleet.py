@@ -95,7 +95,7 @@ class TestFleetManagerUnit:
 class TestFleetRoutes:
     @pytest.fixture
     def client(self):
-        with TestClient(app) as test_client:
+        with TestClient(app, headers={"Authorization": "Bearer ollama"}) as test_client:
             yield test_client
 
     def test_register_speaker_route(self, client):

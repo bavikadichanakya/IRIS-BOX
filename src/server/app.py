@@ -9,7 +9,16 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Request
+from fastapi.responses import JSONResponse
+from src.security import (
+    auth_manager,
+    verify_api_key,
+    redact_sensitive_data,
+    SecurityHeadersMiddleware,
+    RateLimitMiddleware,
+    RequestSizeLimiterMiddleware,
+)
 from src.models.schemas import VoiceCommandPayload, AgentExecutionResult
 from src.agent.orchestrator import IRISOrchestrator
 from src.audio.tts import TTSEngine
@@ -101,8 +110,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-app.include_router(fleet_router)
-app.include_router(fleet_router, prefix="/api")
+# Add Security & Protection Middlewares
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(RequestSizeLimiterMiddleware)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    redacted_msg = redact_sensitive_data(str(exc))
+    logger.error(f"Unhandled exception on {request.url.path}: {redacted_msg}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal Server Error", "message": "An unexpected internal error occurred."}
+    )
+
+
+# Protected Fleet API endpoints requiring authentication
+app.include_router(fleet_router, dependencies=[Depends(verify_api_key)])
+app.include_router(fleet_router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
 @app.get("/health")
 async def health():
@@ -110,6 +136,12 @@ async def health():
 
 
 async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "unknown", session_id: Optional[str] = None):
+    # Check query param token auth
+    token = websocket.query_params.get("token") or websocket.query_params.get("api_key")
+    if token and not auth_manager.validate_token(token, device_id=device_id):
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
+
     await websocket.accept()
     sess_id = session_id or str(uuid.uuid4())
     dev_id = device_id or "unknown"
@@ -197,9 +229,12 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                             clean = text_part.strip()
                             if not clean:
                                 return
-                            async for pcm_chunk in tts_engine.stream_audio(clean):
-                                b64_pcm = base64.b64encode(pcm_chunk).decode("utf-8")
-                                await ws_mgr.send_payload(sess_id, OutboundAudioOutputPayload(format="pcm16", data=b64_pcm))
+                            try:
+                                async for pcm_chunk in tts_engine.stream_audio(clean):
+                                    b64_pcm = base64.b64encode(pcm_chunk).decode("utf-8")
+                                    await ws_mgr.send_payload(sess_id, OutboundAudioOutputPayload(format="pcm16", data=b64_pcm))
+                            except Exception as e:
+                                logger.warning(f"TTS synthesis skipped: {e}")
 
                         try:
                             async for chunk in orchestrator.stream_request(
@@ -208,7 +243,7 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                                 device_id=dev_id,
                                 request_id=request_id
                             ):
-                                if chunk.chunk_type == "text_delta" and chunk.delta_text:
+                                if chunk.chunk_type in ("text_delta", "complete") and chunk.delta_text:
                                     await ws_mgr.send_payload(sess_id, OutboundTokenDeltaPayload(delta=chunk.delta_text, request_id=request_id))
                                     sentence_buf += chunk.delta_text
                                     parts = delimiters.split(sentence_buf)
@@ -234,6 +269,8 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                             raise
                         except Exception as err:
                             await ws_mgr.send_payload(sess_id, OutboundErrorPayload(code="PROCESSING_ERROR", message=str(err)))
+                            duration = (time.time() - start_t) * 1000.0
+                            await ws_mgr.send_payload(sess_id, OutboundTurnCompletePayload(request_id=request_id, duration_ms=round(duration, 2)))
 
                     t = asyncio.create_task(process_text_task())
                     ws_mgr.register_task(sess_id, t)

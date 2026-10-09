@@ -1,6 +1,5 @@
 import json
-from unittest.mock import Mock, patch
-
+from unittest.mock import Mock, patch, ANY
 import pytest
 from starlette.testclient import TestClient
 from fastapi import FastAPI
@@ -106,5 +105,7 @@ def test_lifespan_startup():
                 mock_orchestrator_class.assert_called_once_with(
                     api_base='https://test.example.com',
                     api_key='test_key',
-                    model='test-model'
+                    model='test-model',
+                    database=ANY
                 )
+

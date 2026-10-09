@@ -6,18 +6,18 @@ from src.audio.stt import Transcriber
 class TestTranscriber:
     def test_init_mock_mode_when_whisper_not_installed(self):
         with patch('src.audio.stt.whisper', None):
-            t = Transcriber()
+            t = Transcriber(fallback_mock=True)
             assert t.mock_mode is True
 
     def test_init_mock_mode_when_model_load_fails(self):
         with patch('src.audio.stt.whisper') as mock_whisper:
             mock_whisper.load_model.side_effect = Exception("load error")
-            t = Transcriber()
+            t = Transcriber(fallback_mock=True)
             assert t.mock_mode is True
 
     def test_transcribe_pcm_mock_mode(self):
         with patch('src.audio.stt.whisper', None):
-            t = Transcriber()
+            t = Transcriber(fallback_mock=True)
             result = t.transcribe_pcm(b'\x00\x00' * 100)
             assert isinstance(result, str)
             assert "Mock" in result
@@ -48,6 +48,6 @@ class TestTranscriber:
 
     def test_detect_language_mock_mode(self):
         with patch('src.audio.stt.whisper', None):
-            t = Transcriber()
+            t = Transcriber(fallback_mock=True)
             lang = t.detect_language(b'\x00\x00' * 10)
             assert lang == "en"

@@ -181,7 +181,7 @@ async def test_room_broadcasting_with_partial_failures(fleet_mgr):
 
 def test_fleet_http_endpoints():
     """Test HTTP fleet API endpoints (/api/fleet/... and /fleet/...)."""
-    with TestClient(app) as client:
+    with TestClient(app, headers={"Authorization": "Bearer ollama"}) as client:
         # 1. Register device via POST /api/fleet/devices/register
         reg_payload = {
             "speaker_id": "http-dev-01",
