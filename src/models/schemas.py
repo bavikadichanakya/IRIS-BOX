@@ -27,9 +27,10 @@ class BrowserAction(BaseModel):
     Schema for a browser action.
     """
     url: str
-    action: Literal["goto", "click", "extract"]
+    action: Literal["goto", "navigate", "click", "type_text", "extract", "extract_text", "screenshot"]
     selector: Optional[str] = None
-
+    input_text: Optional[str] = None
+    timeout_ms: Optional[int] = None
 
 class VoiceCommandPayload(BaseModel):
     """

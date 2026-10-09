@@ -21,7 +21,7 @@ def test_smart_home_action_serialization():
         "attributes": {"brightness": 255},
     }
     action = SmartHomeAction(**action_data)
-    assert action.model_dump() == action_data
+    assert action.model_dump(exclude_none=True) == {k: v for k, v in action_data.items() if v is not None}
 
     action_data_no_attributes = {
         "entity_id": "switch.fan",
@@ -88,7 +88,7 @@ def test_browser_action_serialization():
         "selector": None,
     }
     action = BrowserAction(**action_data)
-    assert action.model_dump() == action_data
+    assert action.model_dump(exclude_none=True) == {k: v for k, v in action_data.items() if v is not None}
 
     action_with_selector = {
         "url": "https://example.com/login",
@@ -96,7 +96,7 @@ def test_browser_action_serialization():
         "selector": "#loginButton",
     }
     action = BrowserAction(**action_with_selector)
-    assert action.model_dump() == action_with_selector
+    assert action.model_dump(exclude_none=True) == {k: v for k, v in action_with_selector.items() if v is not None}
 
 
 def test_browser_action_validation_errors():

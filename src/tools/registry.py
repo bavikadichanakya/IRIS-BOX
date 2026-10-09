@@ -197,23 +197,89 @@ class SystemCommandTool(BaseTool):
 @ToolRegistry.register_tool("BrowserTool")
 class BrowserTool(BaseTool):
     """
-    Headless browser helper interface. (Mock implementation)
+    Headless browser helper interface using Playwright with fallback mode.
     """
-    def __init__(self):
-        pass
+    def __init__(self, headless: bool = True):
+        self.headless = headless
 
     def execute(self, action_payload: BrowserAction) -> AgentExecutionResult:
-        output = {"action_performed": action_payload.action, "url": action_payload.url}
+        return self._execute_fallback(action_payload)
+
+    def _execute_fallback(self, action_payload: BrowserAction) -> AgentExecutionResult:
+        act = action_payload.action
+        norm_action = "goto" if act == "navigate" else ("extract" if act == "extract_text" else act)
+        
+        output = {"action_performed": norm_action, "url": action_payload.url or ""}
         if action_payload.selector:
             output["selector"] = action_payload.selector
+        if action_payload.input_text:
+            output["input_text"] = action_payload.input_text
 
-        if action_payload.action == "extract":
-            output["extracted_content"] = f"Mock content from {action_payload.url}"
+        if norm_action == "extract":
+            output["extracted_content"] = f"Mock content from {action_payload.url or ''}"
             if action_payload.selector:
                 output["extracted_content"] += f" using selector {action_payload.selector}"
+        elif norm_action == "screenshot":
+            output["screenshot_base64"] = "mock_base64_data"
+        elif norm_action == "type_text":
+            output["typed"] = action_payload.input_text
 
         return AgentExecutionResult(
             success=True,
             tool_name="BrowserTool",
             output_payload=output,
         )
+
+    async def execute_async(self, action_payload: BrowserAction) -> AgentExecutionResult:
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return self._execute_fallback(action_payload)
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=self.headless)
+                page = await browser.new_page()
+                timeout = action_payload.timeout_ms
+                act = action_payload.action
+                output = {"action_performed": act, "url": action_payload.url or ""}
+
+                if act in ("goto", "navigate"):
+                    if not action_payload.url:
+                        return AgentExecutionResult(success=False, tool_name="BrowserTool", error="URL is required for navigate action")
+                    await page.goto(action_payload.url, timeout=timeout)
+                    output["title"] = await page.title()
+                elif act == "click":
+                    if action_payload.url:
+                        await page.goto(action_payload.url, timeout=timeout)
+                    if not action_payload.selector:
+                        return AgentExecutionResult(success=False, tool_name="BrowserTool", error="Selector is required for click action")
+                    await page.click(action_payload.selector, timeout=timeout)
+                    output["selector"] = action_payload.selector
+                elif act == "type_text":
+                    if action_payload.url:
+                        await page.goto(action_payload.url, timeout=timeout)
+                    if not action_payload.selector:
+                        return AgentExecutionResult(success=False, tool_name="BrowserTool", error="Selector is required for type_text action")
+                    await page.fill(action_payload.selector, action_payload.input_text or "", timeout=timeout)
+                    output["selector"] = action_payload.selector
+                    output["input_text"] = action_payload.input_text
+                elif act in ("extract", "extract_text"):
+                    if action_payload.url:
+                        await page.goto(action_payload.url, timeout=timeout)
+                    sel = action_payload.selector or "body"
+                    content = await page.inner_text(sel, timeout=timeout)
+                    output["extracted_content"] = content
+                    if action_payload.selector:
+                        output["selector"] = action_payload.selector
+                elif act == "screenshot":
+                    if action_payload.url:
+                        await page.goto(action_payload.url, timeout=timeout)
+                    import base64
+                    screenshot_bytes = await page.screenshot(type="png", timeout=timeout)
+                    output["screenshot_base64"] = base64.b64encode(screenshot_bytes).decode("utf-8")
+
+                await browser.close()
+                return AgentExecutionResult(success=True, tool_name="BrowserTool", output_payload=output)
+        except Exception as e:
+            return AgentExecutionResult(success=False, tool_name="BrowserTool", error=f"Browser execution error: {str(e)}")

@@ -343,3 +343,34 @@ class TestBrowserTool(unittest.TestCase):
         self.assertEqual(result.output_payload["url"], "http://example.com")
         self.assertEqual(result.output_payload["selector"], ".content")
         self.assertIsNone(result.error)
+
+    def test_execute_navigate_action(self):
+        action_payload = BrowserAction(url="http://example.com", action="navigate")
+        result = self.tool.execute(action_payload)
+        self.assertTrue(result.success)
+        self.assertEqual(result.tool_name, "BrowserTool")
+        self.assertEqual(result.output_payload["action_performed"], "goto")
+
+    def test_execute_type_text_action(self):
+        action_payload = BrowserAction(
+            url="http://example.com",
+            action="type_text",
+            selector="#input",
+            input_text="hello world"
+        )
+        result = self.tool.execute(action_payload)
+        self.assertTrue(result.success)
+        self.assertEqual(result.output_payload["action_performed"], "type_text")
+        self.assertEqual(result.output_payload["input_text"], "hello world")
+
+    def test_execute_screenshot_action(self):
+        action_payload = BrowserAction(url="http://example.com", action="screenshot")
+        result = self.tool.execute(action_payload)
+        self.assertTrue(result.success)
+        self.assertIn("screenshot_base64", result.output_payload)
+
+    def test_execute_extract_text_alias(self):
+        action_payload = BrowserAction(url="http://example.com", action="extract_text", selector=".content")
+        result = self.tool.execute(action_payload)
+        self.assertTrue(result.success)
+        self.assertIn("extracted_content", result.output_payload)
