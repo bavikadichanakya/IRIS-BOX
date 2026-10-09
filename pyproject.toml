@@ -3,9 +3,13 @@ name = "iris-backend"
 version = "0.1.0"
 dependencies = [
     "aiosqlite>=0.22.1",
+    "edge-tts>=7.2.8",
+    "onnxruntime>=1.30.0",
     "openai>=1.0.0",
+    "openwakeword>=0.4.0",
     "pydantic>=2.0.0",
     "requests>=2.31.0",
+    "sounddevice>=0.5.5",
 ]
 
 [project.optional-dependencies]
@@ -22,5 +26,6 @@ packages = ["src"]
 
 [dependency-groups]
 dev = [
+    "aider-chat>=0.86.2",
     "pytest-asyncio>=1.4.0",
 ]

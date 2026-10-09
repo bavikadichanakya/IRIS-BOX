@@ -46,7 +46,7 @@ class TestTTSEngine:
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
                 engine = TTSEngine()
-                engine._cache["Hello"] = b"cached_audio"  # pre‑seed cache
+                engine._cache["Hello"] = b"cached_audio"  # preÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Ëœseed cache
 
                 chunks = []
                 async for chunk in engine.stream_audio("Hello"):
@@ -148,10 +148,10 @@ class TestTTSEngine:
         async def _test():
             with patch("src.audio.tts.TTSEngine._use_piper", return_value=True):
                 with patch("src.audio.tts.TTSEngine._get_piper_path", return_value="/usr/local/bin/piper"):
-                with patch("src.audio.tts.TTSEngine._get_model_path", return_value="/nonexistent/path"):
-                    engine = TTSEngine()
-                    async for _ in engine.stream_audio("Hi"):
-                        pass
+                    with patch("src.audio.tts.TTSEngine._get_model_path", return_value="/nonexistent/path"):
+                        engine = TTSEngine()
+                        async for _ in engine.stream_audio("Hi"):
+                            pass
 
         with pytest.raises(RuntimeError, match="ONNX model not found"):
             asyncio.run(_test())
@@ -161,10 +161,10 @@ class TestTTSEngine:
         async def _test():
             with patch("src.audio.tts.TTSEngine._use_piper", return_value=True):
                 with patch("src.audio.tts.TTSEngine._get_piper_path", return_value="/usr/local/bin/piper"):
-                with patch("src.audio.tts.TTSEngine._get_model_path", return_value="/path/to/en_US-lessac-medium.onnx"):
-                    engine = TTSEngine()
-                    command = await engine._get_piper_command("Hello", "en-US-AriaNeural", "+0%", "+0Hz")
-                    expected_command = [
+                    with patch("src.audio.tts.TTSEngine._get_model_path", return_value="/path/to/en_US-lessac-medium.onnx"):
+                        engine = TTSEngine()
+                        command = await engine._get_piper_command("Hello", "en-US-AriaNeural", "+0%", "+0Hz")
+                        expected_command = [
                         "/usr/local/bin/piper",
                         "--model",
                         "/path/to/en_US-lessac-medium.onnx",
@@ -179,4 +179,4 @@ class TestTTSEngine:
                     ]
                     assert command == expected_command
 
-        await asyncio.run(_test())
+        asyncio.run(_test())

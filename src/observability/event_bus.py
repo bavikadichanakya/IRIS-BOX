@@ -1,36 +1,56 @@
-from typing import Dict, List, Optional
-from pydantic import BaseModel
 import asyncio
+import time
+from typing import Dict, List, Callable, Any, Optional
+from pydantic import BaseModel, Field
+from src.observability.tracing import TraceContext
 
 class Event(BaseModel):
     topic: str
-    payload: dict
+    payload: Dict[str, Any]
+    trace: TraceContext
+    timestamp: float = Field(default_factory=time.time)
 
 class EventLedger:
-    def __init__(self):
-        self.events: List[Event] = []
+    """Sequential append-only audit ledger for system events."""
+    def __init__(self, max_history: int = 1000):
+        self.max_history = max_history
+        self._records: List[Event] = []
 
-    def record_event(self, event: Event):
-        self.events.append(event)
+    def record(self, event: Event):
+        self._records.append(event)
+        if len(self._records) > self.max_history:
+            self._records.pop(0)
 
-    def get_events(self) -> List[Event]:
-        return self.events
+    def get_events(self, topic_prefix: Optional[str] = None) -> List[Event]:
+        if not topic_prefix:
+            return list(self._records)
+        return [e for e in self._records if e.topic.startswith(topic_prefix)]
 
 class EventBus:
-    def __init__(self):
-        self.subscribers: Dict[str, List[Callable[[Event], None]]] = {}
+    """Asynchronous publish-subscribe event bus with ledger audit."""
+    def __init__(self, ledger: Optional[EventLedger] = None):
+        self._subscribers: Dict[str, List[Callable[[Event], Any]]] = {}
+        self.ledger = ledger or EventLedger()
 
-    async def subscribe(self, topic: str, callback: Callable[[Event], None]):
-        if topic not in self.subscribers:
-            self.subscribers[topic] = []
-        self.subscribers[topic].append(callback)
+    def subscribe(self, topic: str, handler: Callable[[Event], Any]):
+        if topic not in self._subscribers:
+            self._subscribers[topic] = []
+        self._subscribers[topic].append(handler)
 
-    async def publish(self, event: Event):
-        if event.topic in self.subscribers:
-            for callback in self.subscribers[event.topic]:
-                await callback(event)
-        self.event_ledger.record_event(event)
+    async def publish(self, topic: str, payload: Dict[str, Any], trace: Optional[TraceContext] = None):
+        trace_ctx = trace or TraceContext()
+        event = Event(topic=topic, payload=payload, trace=trace_ctx)
+        self.ledger.record(event)
 
-    @property
-    def event_ledger(self) -> EventLedger:
-        return EventLedger()
+        handlers = list(self._subscribers.get(topic, []))
+        if "*" in self._subscribers:
+            handlers.extend(self._subscribers["*"])
+
+        for handler in handlers:
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(event)
+                else:
+                    handler(event)
+            except Exception:
+                pass
