@@ -15,10 +15,19 @@ from src.observability.tracing import TraceContext, create_trace_context
 logger = logging.getLogger("iris.voice.pipeline")
 
 
+class VoicePipelineState:
+    IDLE = "IDLE"
+    WAKE_DETECTED = "WAKE_DETECTED"
+    LISTENING = "LISTENING"
+    PROCESSING = "PROCESSING"
+    SPEAKING = "SPEAKING"
+
+
 class VoicePipeline:
     """
     End-to-End Voice Pipeline Orchestrator:
     Chains VAD -> Wakeword Detection -> STT -> Agent Orchestrator -> TTS.
+    Enforces strict state transitions: IDLE -> WAKE_DETECTED -> LISTENING -> PROCESSING -> SPEAKING -> IDLE.
     Provides real-time event telemetry via EventBus and graceful cancellation for barge-in interruptions.
     """
 
@@ -47,19 +56,34 @@ class VoicePipeline:
         self.audio_buffer = CircularAudioBuffer(capacity_seconds=10.0, sample_rate=sample_rate)
         self.is_speaking = False
         self.is_listening = True
-        self.state = "IDLE"  # IDLE, RECORDING, PROCESSING, SPEAKING
+        self.state = VoicePipelineState.IDLE
         self._interrupt_event = asyncio.Event()
         self._active_tts_task: Optional[asyncio.Task] = None
 
+    async def set_state(self, new_state: str, trace_context: Optional[TraceContext] = None):
+        """Transition pipeline state and emit voice.state_changed event."""
+        old_state = self.state
+        if old_state != new_state:
+            self.state = new_state
+            await self.event_bus.publish(
+                "voice.state_changed",
+                {
+                    "device_id": self.device_id,
+                    "old_state": old_state,
+                    "new_state": new_state,
+                },
+                trace=trace_context
+            )
+
     def interrupt_tts(self):
         """Cancel current TTS stream gracefully on user interruption (barge-in)."""
-        if self.is_speaking or self.state == "SPEAKING":
+        if self.is_speaking or self.state == VoicePipelineState.SPEAKING:
             logger.info("Barge-in detected! Interrupting active TTS playback.")
             self._interrupt_event.set()
             if self._active_tts_task and not self._active_tts_task.done():
                 self._active_tts_task.cancel()
             self.is_speaking = False
-            self.state = "IDLE"
+            self.state = VoicePipelineState.LISTENING
 
     async def process_audio_chunk(
         self,
@@ -80,17 +104,22 @@ class VoicePipeline:
             wakeword_detected = False
 
         if wakeword_detected:
-            # If user spoke wakeword while TTS was outputting audio -> Barge-in interruption
-            if self.is_speaking:
+            if self.is_speaking or self.state == VoicePipelineState.SPEAKING:
                 self.interrupt_tts()
                 await self.event_bus.publish("voice.barge_in", {"device_id": self.device_id}, trace=trace)
 
+            await self.set_state(VoicePipelineState.WAKE_DETECTED, trace_context=trace)
             await self.event_bus.publish(
                 "voice.wakeword.detected",
-                {"device_id": self.device_id, "keyword": self.wakeword.keyword},
+                {"device_id": self.device_id, "keyword": getattr(self.wakeword, "keyword", "hey iris")},
                 trace=trace
             )
-            self.state = "RECORDING"
+            await self.event_bus.publish(
+                "voice.wake_detected",
+                {"device_id": self.device_id, "keyword": getattr(self.wakeword, "keyword", "hey iris")},
+                trace=trace
+            )
+            await self.set_state(VoicePipelineState.LISTENING, trace_context=trace)
             return {"status": "wakeword_detected", "state": self.state}
 
         # 2. Convert chunk to list of samples for VAD & buffer storage
@@ -111,6 +140,12 @@ class VoicePipeline:
         is_speech = False
         if len(samples) >= self.vad.frame_size:
             is_speech = self.vad.is_speech(samples[:self.vad.frame_size])
+
+        # If user speaks during active TTS -> Barge-in
+        if is_speech and (self.is_speaking or self.state == VoicePipelineState.SPEAKING):
+            self.interrupt_tts()
+            await self.event_bus.publish("voice.barge_in", {"device_id": self.device_id}, trace=trace)
+            await self.set_state(VoicePipelineState.LISTENING, trace_context=trace)
 
         return {
             "status": "processed",
@@ -134,15 +169,15 @@ class VoicePipeline:
         self._interrupt_event.clear()
 
         # Step 1: STT
-        self.state = "PROCESSING"
+        await self.set_state(VoicePipelineState.PROCESSING, trace_context=trace)
         await self.event_bus.publish("voice.stt.started", {"device_id": self.device_id}, trace=trace)
-        
+
         try:
             transcript = self.stt.transcribe_pcm(audio_pcm, sample_rate=self.sample_rate)
         except Exception as err:
             logger.error(f"STT failed: {err}")
             await self.event_bus.publish("voice.stt.failed", {"device_id": self.device_id, "error": str(err)}, trace=trace)
-            self.state = "IDLE"
+            await self.set_state(VoicePipelineState.IDLE, trace_context=trace)
             return
 
         await self.event_bus.publish(
@@ -150,10 +185,15 @@ class VoicePipeline:
             {"device_id": self.device_id, "transcript": transcript},
             trace=trace
         )
+        await self.event_bus.publish(
+            "voice.transcription_completed",
+            {"device_id": self.device_id, "transcript": transcript},
+            trace=trace
+        )
 
         if not transcript or not transcript.strip():
             logger.info("Empty transcript from STT. Aborting turn.")
-            self.state = "IDLE"
+            await self.set_state(VoicePipelineState.IDLE, trace_context=trace)
             return
 
         # Step 2: Agent Orchestration Streaming
@@ -163,9 +203,10 @@ class VoicePipeline:
             trace=trace
         )
 
-        self.state = "SPEAKING"
+        await self.set_state(VoicePipelineState.SPEAKING, trace_context=trace)
         self.is_speaking = True
         await self.event_bus.publish("voice.tts.started", {"device_id": self.device_id}, trace=trace)
+        await self.event_bus.publish("voice.tts_started", {"device_id": self.device_id}, trace=trace)
 
         delimiters = re.compile(r"([.!?\n]+(?:\s+|$))")
         text_buffer = ""
@@ -198,18 +239,14 @@ class VoicePipeline:
                                     break
                                 yield audio_bytes
 
-                elif chunk_payload.chunk_type == "tool_call":
-                    # If tool execution returned output text/result
-                    tool_json = chunk_payload.delta_text
-                    if "output_payload" in tool_json:
-                        pass
-
             # Flush trailing sentence buffer
             if text_buffer.strip() and not self._interrupt_event.is_set():
                 async for audio_bytes in self.tts.stream_audio(text_buffer.strip()):
                     if self._interrupt_event.is_set():
                         break
                     yield audio_bytes
+
+            await self.event_bus.publish("voice.tts_completed", {"device_id": self.device_id}, trace=trace)
 
         except asyncio.CancelledError:
             logger.info("Voice pipeline execution cancelled.")
@@ -219,8 +256,9 @@ class VoicePipeline:
             await self.event_bus.publish("voice.pipeline.failed", {"device_id": self.device_id, "error": str(exc)}, trace=trace)
         finally:
             self.is_speaking = False
-            self.state = "IDLE"
+            await self.set_state(VoicePipelineState.IDLE, trace_context=trace)
             await self.event_bus.publish("voice.pipeline.completed", {"device_id": self.device_id}, trace=trace)
 
 
 VoicePipelineService = VoicePipeline
+
