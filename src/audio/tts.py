@@ -170,3 +170,7 @@ class TTSEngine:
         async for chunk in self.stream_audio(text, voice):
             chunks.append(chunk)
         return b"".join(chunks)
+
+    async def synthesize(self, text: str, voice: Optional[str] = None) -> bytes:
+        """Synthesize text into full audio bytes (alias for speak)."""
+        return await self.speak(text, voice)

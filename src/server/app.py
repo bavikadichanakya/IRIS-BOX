@@ -70,9 +70,9 @@ async def lifespan(app: FastAPI):
     db = Database(db_path=db_path)
     await db.connect()
 
-    api_base = os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
+    api_base = os.getenv("IRIS_LLM_BASE_URL") or os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("IRIS_API_KEY", "ollama")
-    model = os.getenv("OPENAI_MODEL", "llama3.2")
+    model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", "qwen2.5:7b-instruct")
 
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
     fleet_mgr = FleetManager(ws_manager=ws_manager, event_bus=orchestrator.event_bus)
@@ -135,6 +135,7 @@ class ProcessRequestPayload(BaseModel):
     prompt: str
     session_id: Optional[str] = "default-session"
     device_id: Optional[str] = "unknown"
+    confirmed: Optional[bool] = False
 
 @app.post("/api/orchestrator/process", dependencies=[Depends(verify_api_key)])
 async def process_orchestrator_request(payload: ProcessRequestPayload, request: Request):
@@ -145,7 +146,8 @@ async def process_orchestrator_request(payload: ProcessRequestPayload, request: 
     result = orchestrator.process_request(
         user_prompt=payload.prompt,
         session_id=payload.session_id or "default-session",
-        device_id=payload.device_id or "unknown"
+        device_id=payload.device_id or "unknown",
+        confirmed=bool(payload.confirmed)
     )
     if hasattr(result, "model_dump"):
         return result.model_dump()

@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
 *.db
+*.wav
+models/
 
