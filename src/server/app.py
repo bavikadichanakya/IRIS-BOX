@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
 from src.security import (
     auth_manager,
@@ -167,11 +167,15 @@ async def confirm_orchestrator_request(payload: ConfirmRequestPayload, request: 
     if not orchestrator:
         return JSONResponse(status_code=500, content={"error": "Orchestrator not initialized"})
     
-    result = orchestrator.process_request(
-        user_prompt=payload.user_prompt or "Execute pending action",
+    from src.tools.permissions import confirmation_manager
+    pending = confirmation_manager.get_pending_action(payload.confirmation_token)
+    if not pending:
+        return JSONResponse(status_code=400, content={"error": "Invalid, expired, or already consumed confirmation token."})
+    
+    result = orchestrator.execute_confirmed_ticket(
+        confirmation_token=payload.confirmation_token,
         session_id=payload.session_id or "default-session",
-        device_id=payload.device_id or "unknown",
-        confirmation_token=payload.confirmation_token
+        device_id=payload.device_id or "unknown"
     )
     if hasattr(result, "model_dump"):
         return result.model_dump()
@@ -196,8 +200,7 @@ def verify_ws_auth(websocket: WebSocket, device_id: Optional[str] = "unknown") -
 
 async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "unknown", session_id: Optional[str] = None):
     if not verify_ws_auth(websocket, device_id=device_id):
-        await websocket.close(code=4401, reason="Unauthorized")
-        return
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     await websocket.accept()
     sess_id = session_id or str(uuid.uuid4())
@@ -356,8 +359,7 @@ async def websocket_realtime_endpoint(websocket: WebSocket, device_id: Optional[
 @app.websocket("/ws/voice-stream")
 async def websocket_endpoint(websocket: WebSocket):
     if not verify_ws_auth(websocket):
-        await websocket.close(code=4401, reason="Unauthorized")
-        return
+        raise HTTPException(status_code=401, detail="Unauthorized")
     await websocket.accept()
     try:
         while True:
@@ -405,8 +407,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
     if not verify_ws_auth(websocket):
-        await websocket.close(code=4401, reason="Unauthorized")
-        return
+        raise HTTPException(status_code=401, detail="Unauthorized")
     await websocket.accept()
     try:
         while True:

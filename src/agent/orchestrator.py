@@ -210,6 +210,54 @@ class IRISOrchestrator:
                 error=tool_result.error or f"Tool '{tool_name}' execution failed."
             )
 
+    def execute_confirmed_ticket(
+        self,
+        confirmation_token: str,
+        device_id: str = "unknown",
+        session_id: str = "default-session"
+    ) -> AgentExecutionResult:
+        from src.tools.permissions import confirmation_manager
+        pending = confirmation_manager.get_pending_action(confirmation_token)
+        if not pending:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="",
+                output_payload={},
+                error="Invalid, expired, or already consumed confirmation token."
+            )
+
+        tool_name = pending.tool_name
+        args_dict = pending.action_payload
+        dev_id = device_id if device_id != "unknown" else pending.device_id
+        sess_id = session_id if session_id != "default-session" else pending.session_id
+
+        context = {
+            "device_id": dev_id,
+            "confirmation_token": confirmation_token,
+            "action_payload": args_dict,
+            "session_id": sess_id,
+        }
+
+        try:
+            from src.observability.tracing import TraceContext
+            trace_ctx = TraceContext(trace_id="", request_id="", device_id=dev_id)
+            tool_result: ToolResult = _run_async(
+                self.react_loop.execute_step(
+                    tool_name=tool_name,
+                    arguments=args_dict,
+                    trace_context=trace_ctx,
+                    context=context
+                )
+            )
+            return self._format_tool_result(tool_name, tool_result)
+        except Exception as e:
+            return AgentExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                output_payload={},
+                error=f"Execution of confirmed action failed: {e}"
+            )
+
     def process_request(
         self,
         user_prompt: str,
@@ -233,7 +281,7 @@ class IRISOrchestrator:
         messages = [
             {
                 "role": "system",
-                "content": "You are IRIS, an AI smart speaker assistant. If a user asks for home automation, system tasks, or browser tasks, call the appropriate tool."
+                "content": "You are IRIS, an AI assistant. ALWAYS call the matching tool function (e.g. SystemCommandTool for terminal/system commands) whenever the user requests executing a system command, running a terminal action, or controlling device/browser capabilities."
             }
         ]
         if session_id:

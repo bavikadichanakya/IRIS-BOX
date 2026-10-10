@@ -67,6 +67,15 @@ class ConfirmationManager:
             "expires_at": action.expires_at,
         }
 
+    def get_pending_action(self, token: str) -> Optional[PendingAction]:
+        if not token or token not in self._pending_actions:
+            return None
+        action = self._pending_actions[token]
+        if action.is_expired():
+            self._pending_actions.pop(token, None)
+            return None
+        return action
+
     def consume_token(
         self,
         token: str,
