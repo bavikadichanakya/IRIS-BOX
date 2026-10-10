@@ -19,6 +19,7 @@ from src.tools.capability import ToolResult, ExecutionStatus
 from src.observability.event_bus import EventBus
 from src.storage.db import Database
 from src.agent.recovery import ResilientLLMProvider, CircuitState, ProviderUnavailableError
+from src.agent.react_loop import ReActLoop
 
 
 def _run_async(coro):
@@ -74,6 +75,7 @@ class IRISOrchestrator:
         tool_manager: Optional[ToolManager] = None,
         database: Optional[Database] = None,
         resilient_provider: Optional[ResilientLLMProvider] = None,
+        max_steps: int = 5,
     ):
         self.client = openai.OpenAI(base_url=api_base, api_key=api_key)
         self.model = model
@@ -85,6 +87,7 @@ class IRISOrchestrator:
         )
         self.database = database
         self.resilient_provider = resilient_provider or ResilientLLMProvider(event_bus=self.event_bus)
+        self.react_loop = ReActLoop(tool_manager=self.tool_manager, max_iterations=max_steps)
         self._tool_schemas: Optional[List[Dict]] = None
         self._payload_models: Dict[str, Type[BaseModel]] = {}
         self.session_memory = SessionMemory()
@@ -290,11 +293,12 @@ class IRISOrchestrator:
             tool_name = message.function_call.name
             raw_args = message.function_call.arguments
         else:
+            text_response = assistant_content.strip() or "No response generated"
             res = AgentExecutionResult(
-                success=False,
+                success=True,
                 tool_name="",
-                output_payload={},
-                error="LLM did not return a function call."
+                output_payload={"response": text_response},
+                error=None
             )
             total_duration_ms = (time.perf_counter() - start_time) * 1000.0
             if self.database:
@@ -302,14 +306,14 @@ class IRISOrchestrator:
                     _run_async(self.database.save_turn(
                         session_id=session_id,
                         user_prompt=user_prompt,
-                        assistant_response=assistant_content or "No function call",
+                        assistant_response=text_response,
                         trace_ids=[trace_id] if trace_id else [],
                         duration_ms=total_duration_ms,
                         device_id=device_id
                     ))
                     _run_async(self.database.record_audit_event(
                         event_type="orchestrator.request_processed",
-                        payload={"request_id": request_id, "text": assistant_content, "duration_ms": total_duration_ms},
+                        payload={"request_id": request_id, "text": text_response, "duration_ms": total_duration_ms},
                         correlation_id=trace_id or request_id or session_id,
                         device_id=device_id
                     ))
@@ -371,12 +375,13 @@ class IRISOrchestrator:
 
         try:
             tool_start = time.perf_counter()
+            from src.observability.tracing import TraceContext
+            trace_ctx = TraceContext(trace_id=trace_id or "", request_id=request_id or "", device_id=device_id or "")
             tool_result: ToolResult = _run_async(
-                self.tool_manager.execute_tool(
-                    name=tool_name,
+                self.react_loop.execute_step(
+                    tool_name=tool_name,
                     arguments=args_dict,
-                    request_id=request_id,
-                    trace_id=trace_id,
+                    trace_context=trace_ctx,
                     context=context
                 )
             )

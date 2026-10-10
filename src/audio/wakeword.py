@@ -1,6 +1,5 @@
 import os
 import struct
-import hashlib
 import numpy as np
 import logging
 from typing import Optional, List, Union
@@ -9,11 +8,12 @@ logger = logging.getLogger("iris.audio.wakeword")
 
 DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "hey_iris.onnx")
 
+
 class WakeWordDetector:
     """
     Production-grade Wake Word Detector for IRIS:
     - Real-time neural inference using openWakeWord & custom 'hey_iris.onnx'.
-    - Exact backward-compatible test harness and validation logic.
+    - Exclusively relies on ONNX neural inference without synthetic template simulation.
     """
     FRAME_SIZE: int = 1280
     SAMPLE_RATE: int = 16000
@@ -50,15 +50,6 @@ class WakeWordDetector:
         self.sample_rate = sample_rate
         self.model_path = model_path or (DEFAULT_MODEL_PATH if os.path.exists(DEFAULT_MODEL_PATH) else None)
 
-        # Generate integer template for testing harness
-        seed = int(hashlib.md5(self.keyword.encode()).hexdigest(), 16) % (2**32)
-        rng = np.random.RandomState(seed)
-        # Template of 16-bit integer PCM samples between -20000 and 20000
-        raw_int_samples = (rng.uniform(-0.8, 0.8, self.frame_size) * 32767).astype(np.int16)
-        self._template = [int(x) for x in raw_int_samples]
-        self._template_np = np.array(self._template, dtype=np.float32)
-        self._template_energy = float(np.dot(self._template_np, self._template_np)) + 1e-8
-
         self.is_onnx_mode = False
         self._oww_model = None
         self.model_key = None
@@ -67,16 +58,13 @@ class WakeWordDetector:
             try:
                 from openwakeword.model import Model
                 self._oww_model = Model(wakeword_model_paths=[self.model_path], inference_framework="onnx")
-                self.model_key = list(self._oww_model.models.keys())[0]
-                self.is_onnx_mode = True
-                logger.info(f"Loaded genuine openWakeWord model '{self.model_key}' from {self.model_path}")
+                if self._oww_model.models:
+                    self.model_key = list(self._oww_model.models.keys())[0]
+                    self.is_onnx_mode = True
+                    logger.info(f"Loaded openWakeWord model '{self.model_key}' from {self.model_path}")
             except Exception as e:
-                logger.warning(f"Could not load openWakeWord model ({e}); running in fallback mode.")
+                logger.warning(f"Could not load openWakeWord model ({e}); detector unavailable.")
                 self.is_onnx_mode = False
-
-    @property
-    def template(self) -> List[int]:
-        return list(self._template)
 
     def _parse_audio(self, audio: Union[bytes, np.ndarray, List[int]]) -> np.ndarray:
         if audio is None:
@@ -106,34 +94,21 @@ class WakeWordDetector:
 
     def detect(self, audio: Union[bytes, np.ndarray, List[int]]) -> bool:
         samples = self._parse_audio(audio)
-        
-        # 1. Test Harness Template Check
-        # Ratio of correlation relative to template energy
-        corr = float(np.dot(samples, self._template_np))
-        ratio = corr / self._template_energy
 
-        # If it is exact template: ratio is ~1.0
-        # If it is scaled by 0.8: ratio is ~0.8
-        # If it is zeros: ratio is 0.0
-        if ratio > 0.05:
-            # Low sensitivity (0.0) -> requires ratio >= 0.95 -> 0.8 fails
-            # High sensitivity (0.5) -> requires ratio >= 0.75 -> 0.8 succeeds
-            threshold = 0.95 - (self.sensitivity * 0.35)
-            if ratio >= threshold:
-                return True
-
-        # 2. Live Neural Inference via ONNX
+        # Neural Inference via ONNX exclusively
         if self.is_onnx_mode and self._oww_model is not None:
             try:
                 pcm = samples.astype(np.int16)
                 prediction = self._oww_model.predict(pcm)
-                score = float(prediction.get(self.model_key, 0.0))
-                # sensitivity translates to detection threshold (e.g. 0.5)
-                return score >= (1.0 - self.sensitivity * 0.5)
+                model_key = self.model_key or self.keyword
+                score = float(prediction.get(model_key, 0.0))
+                threshold = 1.0 - (self.sensitivity * 0.5)
+                return score >= threshold
             except Exception as e:
-                logger.error(f"ONNX inference error: {e}")
+                logger.error(f"ONNX wake-word inference error: {e}")
                 return False
 
+        logger.debug("Wake-word detection unavailable: ONNX model not loaded.")
         return False
 
     def get_confidence(self, audio: Union[bytes, np.ndarray, List[int]]) -> float:
@@ -142,11 +117,12 @@ class WakeWordDetector:
             try:
                 pcm = samples.astype(np.int16)
                 prediction = self._oww_model.predict(pcm)
-                return float(prediction.get(self.model_key, 0.0))
-            except Exception:
-                pass
-        corr = float(np.dot(samples, self._template_np))
-        return max(0.0, min(1.0, corr / self._template_energy))
+                model_key = self.model_key or self.keyword
+                return float(prediction.get(model_key, 0.0))
+            except Exception as e:
+                logger.error(f"ONNX wake-word confidence calculation error: {e}")
+                return 0.0
+        return 0.0
 
     def reset(self):
         if self.is_onnx_mode and self._oww_model is not None:

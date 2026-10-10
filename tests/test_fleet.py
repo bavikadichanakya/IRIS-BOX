@@ -92,10 +92,13 @@ class TestFleetManagerUnit:
         assert res_specific.target_speaker_ids == ["spk-1"]
 
 
+from src.security.auth import auth_manager
+
+
 class TestFleetRoutes:
     @pytest.fixture
     def client(self):
-        with TestClient(app, headers={"Authorization": "Bearer ollama"}) as test_client:
+        with TestClient(app, headers={"Authorization": f"Bearer {auth_manager.master_key}"}) as test_client:
             yield test_client
 
     def test_register_speaker_route(self, client):

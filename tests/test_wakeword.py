@@ -46,25 +46,34 @@ class TestWakeWordDetector:
         audio = struct.pack(f'<{self.frame_size}h', *([0] * self.frame_size))
         assert detector.detect(audio) is False
 
-    def test_detect_exact_template_returns_true(self):
+    def test_detect_without_onnx_model_returns_false(self):
         detector = WakeWordDetector(self.keyword)
-        template = detector.template
-        audio = struct.pack(f'<{self.frame_size}h', *template)
+        detector.is_onnx_mode = False
+        detector._oww_model = None
+        audio = struct.pack(f'<{self.frame_size}h', *([100] * self.frame_size))
+        assert detector.detect(audio) is False
+
+    def test_detect_with_mocked_onnx_model(self):
+        class MockOWWModel:
+            def __init__(self, score):
+                self.score = score
+            def predict(self, pcm):
+                return {"hey iris": self.score}
+            def reset(self):
+                pass
+
+        detector = WakeWordDetector(self.keyword, sensitivity=0.5)
+        detector.is_onnx_mode = True
+        detector.model_key = "hey iris"
+        
+        # Low score -> False
+        detector._oww_model = MockOWWModel(0.1)
+        audio = struct.pack(f'<{self.frame_size}h', *([100] * self.frame_size))
+        assert detector.detect(audio) is False
+
+        # High score -> True
+        detector._oww_model = MockOWWModel(0.9)
         assert detector.detect(audio) is True
-
-    def test_detect_scaled_template_sensitivity(self):
-        # Create a detector with low sensitivity
-        detector_low = WakeWordDetector(self.keyword, sensitivity=0.0)
-        template = detector_low.template
-        # Scale template by 0.8
-        scaled = [int(s * 0.8) for s in template]
-        audio = struct.pack(f'<{self.frame_size}h', *scaled)
-        # At low sensitivity, should not detect
-        assert detector_low.detect(audio) is False
-
-        # With high sensitivity, should detect
-        detector_high = WakeWordDetector(self.keyword, sensitivity=0.5)
-        assert detector_high.detect(audio) is True
 
     def test_detect_empty_frame_raises(self):
         detector = WakeWordDetector(self.keyword)

@@ -2,6 +2,7 @@ import asyncio
 import functools
 import inspect
 import os
+import shlex
 import subprocess
 from typing import Callable, Dict, Any, Type, List
 
@@ -128,24 +129,12 @@ class ToolRegistry:
 class HomeAssistantTool(BaseTool):
     """
     Dispatches local REST requests to Home Assistant with token auth.
-    Includes mock mode for testing without a live HA instance.
     """
-    def __init__(self, ha_url: str = "", ha_token: str = "", mock_mode: bool = None):
-        if mock_mode is None:
-            # Auto-detect: default to True if HA_URL or HA_TOKEN env vars are missing/empty
-            env_ha_url = os.environ.get("HA_URL", "")
-            env_ha_token = os.environ.get("HA_TOKEN", "")
-            if not ha_url:
-                ha_url = env_ha_url
-            if not ha_token:
-                ha_token = env_ha_token
-            mock_mode = not (ha_url and ha_token)
-        
-        if not mock_mode and (not ha_url or not ha_token):
-            raise ValueError("HA URL and token must be provided unless in mock mode.")
-        
-        self.ha_url = ha_url
-        self.ha_token = ha_token
+    def __init__(self, ha_url: str = "", ha_token: str = "", mock_mode: bool = False):
+        env_ha_url = os.environ.get("HA_URL", "")
+        env_ha_token = os.environ.get("HA_TOKEN", "")
+        self.ha_url = ha_url or env_ha_url
+        self.ha_token = ha_token or env_ha_token
         self.mock_mode = mock_mode
         self.headers = {
             "Authorization": f"Bearer {self.ha_token}",
@@ -158,6 +147,14 @@ class HomeAssistantTool(BaseTool):
                 success=True,
                 tool_name="HomeAssistantTool",
                 output_payload={"message": "Mock HA call successful."},
+            )
+
+        if not self.ha_url or not self.ha_token:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="HomeAssistantTool",
+                output_payload={},
+                error="Home Assistant credentials missing or unreachable",
             )
 
         try:
@@ -179,14 +176,14 @@ class HomeAssistantTool(BaseTool):
                 success=False,
                 tool_name="HomeAssistantTool",
                 output_payload={},
-                error=f"Home Assistant API error: {type(e).__name__}: {e}",
+                error="Home Assistant credentials missing or unreachable",
             )
         except Exception as e:
             return AgentExecutionResult(
                 success=False,
                 tool_name="HomeAssistantTool",
                 output_payload={},
-                error=f"An unexpected error occurred: {type(e).__name__}: {e}",
+                error=f"Home Assistant credentials missing or unreachable ({type(e).__name__}: {e})",
             )
 
 
@@ -194,6 +191,7 @@ class HomeAssistantTool(BaseTool):
 class SystemCommandTool(BaseTool):
     """
     Safe local command executor with a whitelist of allowed commands.
+    Uses shell=False with argument array tokenization for security.
     """
     _ALLOWED_COMMANDS = {
         "dir", "ls", "echo", "pwd", "cd", "sleep",
@@ -212,9 +210,25 @@ class SystemCommandTool(BaseTool):
                 error=f"SECURITY_DENIED: {reason}",
             )
 
-        command_parts = action_payload.command.split(maxsplit=1)
-        base_command = command_parts[0]
+        try:
+            command_args = shlex.split(action_payload.command)
+        except Exception as e:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="SystemCommandTool",
+                output_payload={},
+                error=f"Invalid command format: {e}",
+            )
 
+        if not command_args:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="SystemCommandTool",
+                output_payload={},
+                error="Empty command.",
+            )
+
+        base_command = command_args[0]
         if base_command not in self._ALLOWED_COMMANDS:
             return AgentExecutionResult(
                 success=False,
@@ -223,15 +237,14 @@ class SystemCommandTool(BaseTool):
                 error=f"Command '{base_command}' is not in the allowed list.",
             )
 
-        try:
-            # 'cd' command does not change the CWD of the Python process when run via subprocess.
-            # The change only applies to the subprocess itself.
-            if base_command == "cd":
-                pass
+        exec_args = list(command_args)
+        if os.name == "nt" and base_command.lower() in {"echo", "dir", "cd", "cls", "type", "pwd"}:
+            exec_args = ["cmd.exe", "/c"] + exec_args
 
+        try:
             result = subprocess.run(
-                action_payload.command,
-                shell=True,
+                exec_args,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=action_payload.timeout_sec,
@@ -271,7 +284,7 @@ class SystemCommandTool(BaseTool):
 @ToolRegistry.register_tool("BrowserTool")
 class BrowserTool(BaseTool):
     """
-    Headless browser helper interface using Playwright with fallback mode.
+    Headless browser helper interface using Playwright.
     """
     def __init__(self, headless: bool = True):
         self.headless = headless
@@ -289,32 +302,15 @@ class BrowserTool(BaseTool):
                     error=f"SSRF_BLOCKED: {reason}"
                 )
 
-        return self._execute_fallback(action_payload)
-
-    def _execute_fallback(self, action_payload: BrowserAction) -> AgentExecutionResult:
-        act = action_payload.action
-        norm_action = "goto" if act == "navigate" else ("extract" if act == "extract_text" else act)
-        
-        output = {"action_performed": norm_action, "url": action_payload.url or ""}
-        if action_payload.selector:
-            output["selector"] = action_payload.selector
-        if action_payload.input_text:
-            output["input_text"] = action_payload.input_text
-
-        if norm_action == "extract":
-            output["extracted_content"] = f"Mock content from {action_payload.url or ''}"
-            if action_payload.selector:
-                output["extracted_content"] += f" using selector {action_payload.selector}"
-        elif norm_action == "screenshot":
-            output["screenshot_base64"] = "mock_base64_data"
-        elif norm_action == "type_text":
-            output["typed"] = action_payload.input_text
-
-        return AgentExecutionResult(
-            success=True,
-            tool_name="BrowserTool",
-            output_payload=output,
-        )
+        try:
+            return asyncio.run(self.execute_async(action_payload))
+        except Exception:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="BrowserTool",
+                output_payload={},
+                error="Playwright is not installed or headless browser binary is missing. Install via 'playwright install'."
+            )
 
     async def execute_async(self, action_payload: BrowserAction) -> AgentExecutionResult:
         from src.security.policy import is_url_allowed
@@ -328,10 +324,16 @@ class BrowserTool(BaseTool):
                     output_payload={},
                     error=f"SSRF_BLOCKED: {reason}"
                 )
+
         try:
             from playwright.async_api import async_playwright
         except ImportError:
-            return self._execute_fallback(action_payload)
+            return AgentExecutionResult(
+                success=False,
+                tool_name="BrowserTool",
+                output_payload={},
+                error="Playwright is not installed or headless browser binary is missing. Install via 'playwright install'."
+            )
 
         try:
             async with async_playwright() as p:
@@ -378,5 +380,10 @@ class BrowserTool(BaseTool):
 
                 await browser.close()
                 return AgentExecutionResult(success=True, tool_name="BrowserTool", output_payload=output)
-        except Exception as e:
-            return AgentExecutionResult(success=False, tool_name="BrowserTool", error=f"Browser execution error: {str(e)}")
+        except Exception:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="BrowserTool",
+                output_payload={},
+                error="Playwright is not installed or headless browser binary is missing. Install via 'playwright install'."
+            )

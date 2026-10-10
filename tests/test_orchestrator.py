@@ -68,6 +68,8 @@ class TestIRISOrchestrator(unittest.TestCase):
         mock_openai.return_value = mock_client
         mock_response = MagicMock()
         mock_message = MagicMock()
+        mock_message.content = "Hello user"
+        mock_message.tool_calls = None
         mock_message.function_call = None
         mock_response.choices = [MagicMock(message=mock_message)]
         mock_client.chat.completions.create.return_value = mock_response
@@ -75,8 +77,8 @@ class TestIRISOrchestrator(unittest.TestCase):
         orchestrator = IRISOrchestrator(api_base="http://mock", api_key="mock")
         result = orchestrator.process_request("test prompt")
 
-        self.assertFalse(result.success)
-        self.assertEqual(result.error, "LLM did not return a function call.")
+        self.assertTrue(result.success)
+        self.assertEqual(result.output_payload, {"response": "Hello user"})
 
     @patch('openai.OpenAI')
     def test_process_request_invalid_arguments(self, mock_openai):

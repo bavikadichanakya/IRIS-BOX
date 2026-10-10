@@ -1,5 +1,6 @@
 import os
 import hmac
+import secrets
 import logging
 from typing import Optional, Dict, Set
 from fastapi import Request, HTTPException, status, Security
@@ -28,17 +29,21 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 class AuthManager:
     """
     Manages API keys, bearer tokens, and per-device tokens.
+    Rejects default trivial keys and generates a secure random token if unconfigured.
     """
 
     def __init__(self, master_key: Optional[str] = None):
-        self.master_key = (
+        key = (
             master_key
             or os.getenv("IRIS_API_KEY")
             or os.getenv("IRIS_MASTER_TOKEN")
-            or os.getenv("OPENROUTER_API_KEY")
-            or os.getenv("OPENAI_API_KEY")
-            or "ollama"
         )
+        if not key or key.lower() in ("ollama", "default", "secret", "password", "admin", "123456"):
+            key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+            if not key or key.lower() in ("ollama", "default", "secret", "password", "admin", "123456"):
+                key = secrets.token_hex(32)
+                logger.info("No master token configured. Generated secure random token for startup.")
+        self.master_key = key
         self.device_tokens: Dict[str, str] = {}  # device_id -> token
 
     def register_device_token(self, device_id: str, token: str):
