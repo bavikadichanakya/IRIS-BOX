@@ -115,6 +115,8 @@ class ToolManager:
         if not allowed:
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             error_reason = reason or "Action denied by permission policy."
+            ticket = ctx_data.get("pending_ticket")
+            cfm_token = ticket.get("confirmation_token") if ticket else None
             await self.event_bus.publish("tool.execution.denied", {"tool": name, "reason": reason}, trace=trace_ctx)
             await self.event_bus.publish("tool.denied", {
                 "tool_name": name,
@@ -129,7 +131,9 @@ class ToolManager:
                 request_id=request_id,
                 trace_id=trace_id,
                 error=error_reason,
-                duration_ms=duration_ms
+                duration_ms=duration_ms,
+                confirmation_token=cfm_token,
+                pending_action=ticket
             )
 
         # 2. Execution with Timeout Boundary

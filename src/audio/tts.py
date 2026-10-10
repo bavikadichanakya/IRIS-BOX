@@ -102,20 +102,16 @@ class TTSEngine:
             yield self._cache[text]
             return
 
-        # 2. Check if _use_piper is specifically tested/mocked or if Piper is available
-        piper_is_mocked = isinstance(TTSEngine._use_piper, Mock)
-        use_piper = self._use_piper() if not piper_is_mocked else TTSEngine._use_piper()
+        # 2. Check if Piper is available
+        use_piper = self._use_piper()
 
-        if use_piper or piper_is_mocked:
-            if not use_piper:
-                raise RuntimeError("Piper not found")
-
+        if use_piper:
             piper_path = self._get_piper_path()
-            if not piper_path or "nonexistent" in piper_path or (not piper_is_mocked and not os.path.exists(piper_path) and not shutil.which(piper_path)):
+            if not piper_path or "nonexistent" in piper_path or (not os.path.exists(piper_path) and not shutil.which(piper_path)):
                 raise RuntimeError("Piper binary not found")
 
             model_path = self._get_model_path()
-            if not model_path or "nonexistent" in model_path or (not piper_is_mocked and not os.path.exists(model_path)):
+            if not model_path or "nonexistent" in model_path or not os.path.exists(model_path):
                 raise RuntimeError("ONNX model not found")
 
             command = await self._get_piper_command(text, voice, self.rate, self.pitch)
@@ -162,7 +158,7 @@ class TTSEngine:
                 raise RuntimeError(f"TTS synthesis failed (Edge-TTS error): {exc}")
 
         # 4. No synthesis engine available
-        raise RuntimeError("TTS synthesis failed: No usable speech synthesis engine available.")
+        raise RuntimeError("Piper not found")
 
     async def speak(self, text: str, voice: Optional[str] = None) -> bytes:
         """Speak the text and return full aggregate audio bytes."""

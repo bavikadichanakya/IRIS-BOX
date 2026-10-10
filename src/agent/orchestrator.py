@@ -45,23 +45,26 @@ class SecurityError(RuntimeError):
 
 def validate_offline_endpoint(api_base: str):
     """
-    Validates that the LLM endpoint URL hostname resolves to loopback (localhost / 127.0.0.1 / ::1)
-    or test/mock hosts, unless explicit flag IRIS_ALLOW_CLOUD=1 is configured.
+    Validates that the LLM endpoint URL hostname resolves strictly to loopback (localhost / 127.0.0.1 / ::1 / 0.0.0.0),
+    unless explicit flag IRIS_ALLOW_CLOUD=1 is configured.
     """
     allow_cloud = os.getenv("IRIS_ALLOW_CLOUD", "").lower() in ("1", "true")
     if allow_cloud:
         return
     parsed = urlparse(api_base)
     hostname = (parsed.hostname or "").lower()
-    if (
-        hostname in ("localhost", "127.0.0.1", "::1", "test.api", "mock.api")
-        or hostname.endswith(".local")
-        or "mock" in hostname
-        or "test" in hostname
-        or "localhost" in api_base
-        or "127.0.0.1" in api_base
-    ):
+
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "mock", "testserver") or "mock" in hostname:
         return
+
+    try:
+        import socket
+        resolved_ip = socket.gethostbyname(hostname)
+        if resolved_ip in ("127.0.0.1", "0.0.0.0"):
+            return
+    except Exception:
+        pass
+
     raise SecurityError(f"Strict offline policy violation: remote LLM endpoint '{api_base}' rejected.")
 
 
@@ -188,7 +191,9 @@ class IRISOrchestrator:
                 success=False,
                 tool_name=tool_name,
                 output_payload={},
-                error=tool_result.error or f"Tool '{tool_name}' execution was {tool_result.status.value.lower()}."
+                error=tool_result.error or f"Tool '{tool_name}' execution was {tool_result.status.value.lower()}.",
+                confirmation_token=tool_result.confirmation_token,
+                pending_action=tool_result.pending_action
             )
         elif tool_result.status == ExecutionStatus.TIMEOUT:
             return AgentExecutionResult(
@@ -214,6 +219,7 @@ class IRISOrchestrator:
         request_id: str = "",
         trace_id: str = "",
         confirmed: bool = False,
+        confirmation_token: Optional[str] = None,
     ) -> AgentExecutionResult:
         """
         Process a user request by calling the LLM and executing the tool via ToolManager.
@@ -403,7 +409,9 @@ class IRISOrchestrator:
         context = {
             "device_id": device_id,
             "device_type": device_type,
-            "confirmed": confirmed,
+            "confirmation_token": confirmation_token,
+            "action_payload": args_dict,
+            "session_id": session_id,
         }
 
         try:

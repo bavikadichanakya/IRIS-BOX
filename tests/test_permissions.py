@@ -1,6 +1,6 @@
-﻿import pytest
+import pytest
 from src.tools.capability import Capability, PermissionLevel
-from src.tools.permissions import PermissionManager
+from src.tools.permissions import PermissionManager, confirmation_manager
 
 @pytest.mark.asyncio
 async def test_public_capability_allowed():
@@ -47,13 +47,21 @@ async def test_sensitive_capability_requires_confirmation():
         permission_level=PermissionLevel.SENSITIVE,
         requires_confirmation=True
     )
-    # Without confirmation
-    allowed, reason = await pm.evaluate(cap, context={"device_id": "laptop-01", "confirmed": False})
+    ctx = {"device_id": "laptop-01", "action_payload": {"cmd": "ls"}}
+    # Without confirmation token (creates pending action)
+    allowed, reason = await pm.evaluate(cap, context=ctx)
     assert allowed is False
     assert "CONFIRMATION_REQUIRED" in reason
+    token = ctx.get("pending_ticket", {}).get("confirmation_token")
+    assert token is not None
 
-    # With confirmation
-    allowed, reason = await pm.evaluate(cap, context={"device_id": "laptop-01", "confirmed": True})
+    # With valid confirmation token
+    ctx_confirmed = {
+        "device_id": "laptop-01",
+        "action_payload": {"cmd": "ls"},
+        "confirmation_token": token
+    }
+    allowed, reason = await pm.evaluate(cap, context=ctx_confirmed)
     assert allowed is True
     assert reason is None
 

@@ -1,4 +1,4 @@
-﻿from enum import Enum
+from enum import Enum
 from typing import Any, Optional, Dict, List
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -35,3 +35,5 @@ class ToolResult(BaseModel):
     output: Optional[Any] = None
     error: Optional[str] = None
     duration_ms: float = 0.0
+    confirmation_token: Optional[str] = None
+    pending_action: Optional[Dict[str, Any]] = None

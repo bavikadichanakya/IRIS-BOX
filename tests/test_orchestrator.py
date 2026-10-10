@@ -157,13 +157,16 @@ class TestIRISOrchestrator(unittest.TestCase):
 
         orchestrator = IRISOrchestrator(api_base="http://mock", api_key="mock")
 
-        # 1. Denied when confirmed is False
-        res_denied = orchestrator.process_request("echo hello", confirmed=False)
+        # 1. Denied when confirmation_token is missing (returns token and pending action)
+        res_denied = orchestrator.process_request("echo hello")
         self.assertFalse(res_denied.success)
         self.assertIn("CONFIRMATION_REQUIRED", res_denied.error)
+        self.assertIsNotNone(res_denied.confirmation_token)
+        self.assertIsNotNone(res_denied.pending_action)
 
-        # 2. Allowed when confirmed is True
-        res_allowed = orchestrator.process_request("echo hello", confirmed=True)
+        # 2. Allowed when valid confirmation_token is provided
+        token = res_denied.confirmation_token
+        res_allowed = orchestrator.process_request("echo hello", confirmation_token=token)
         self.assertTrue(res_allowed.success)
         self.assertEqual(res_allowed.output_payload, {"stdout": "hello"})
 

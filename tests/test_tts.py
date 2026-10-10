@@ -17,6 +17,11 @@ def _make_async_gen(items):
 class TestTTSEngine:
     """Unit tests for the TTSEngine class."""
 
+    @pytest.fixture(autouse=True)
+    def disable_piper(self):
+        with patch.object(TTSEngine, "_use_piper", return_value=False):
+            yield
+
     def test_stream_audio_yields_chunks(self):
         """Test that stream_audio yields audio chunks from edge-tts."""
         async def _test():
@@ -147,7 +152,7 @@ class TestTTSEngine:
         """Test that a RuntimeError is raised when ONNX model is missing."""
         async def _test():
             with patch("src.audio.tts.TTSEngine._use_piper", return_value=True):
-                with patch("src.audio.tts.TTSEngine._get_piper_path", return_value="/usr/local/bin/piper"):
+                with patch("src.audio.tts.TTSEngine._get_piper_path", return_value=__file__):
                     with patch("src.audio.tts.TTSEngine._get_model_path", return_value="/nonexistent/path"):
                         engine = TTSEngine()
                         async for _ in engine.stream_audio("Hi"):

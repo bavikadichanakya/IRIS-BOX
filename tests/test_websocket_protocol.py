@@ -53,9 +53,13 @@ def test_protocol_message_parsing():
         parse_inbound_message({"type": "unknown_type"})
 
 
+from src.security.auth import auth_manager
+
+
 def test_websocket_connection_handshake(client):
     """Test connection handshake, initial 'connected' envelope, and version negotiation."""
-    with client.websocket_connect("/ws?device_id=test-speaker-01") as websocket:
+    url = f"/ws?device_id=test-speaker-01&token={auth_manager.master_key}"
+    with client.websocket_connect(url) as websocket:
         # Receive initial connected message
         data = websocket.receive_json()
         assert data["type"] == "connected"
@@ -66,7 +70,8 @@ def test_websocket_connection_handshake(client):
 
 def test_websocket_ping_pong_heartbeat(client):
     """Test sending ping message returns pong response."""
-    with client.websocket_connect("/ws") as websocket:
+    url = f"/ws?token={auth_manager.master_key}"
+    with client.websocket_connect(url) as websocket:
         _ = websocket.receive_json()  # Handshake connected payload
 
         # Send ping
@@ -78,33 +83,45 @@ def test_websocket_ping_pong_heartbeat(client):
 
 def test_websocket_text_input_streaming(client):
     """Test text input streaming yields transcript, tokens, and turn_complete."""
-    with client.websocket_connect("/v1/ws?device_id=living-room") as websocket:
-        handshake = websocket.receive_json()
-        assert handshake["type"] == "connected"
+    from unittest.mock import patch, MagicMock
+    from src.models.schemas import AgentExecutionResult
 
-        # Send text input
-        websocket.send_json({"type": "text_input", "text": "Hello IRIS"})
+    mock_result = AgentExecutionResult(success=True, tool_name="", output_payload={"response": "Hello!"})
+    if hasattr(app.state, "orchestrator") and app.state.orchestrator:
+        p = patch.object(app.state.orchestrator, "process_request", return_value=mock_result)
+    else:
+        p = patch("src.agent.orchestrator.IRISOrchestrator.process_request", return_value=mock_result)
 
-        # First message should be transcript confirmation
-        msg1 = websocket.receive_json()
-        assert msg1["type"] == "transcript"
-        assert msg1["text"] == "Hello IRIS"
-        assert msg1["is_final"] is True
+    with p:
+        url = f"/v1/ws?device_id=living-room&token={auth_manager.master_key}"
+        with client.websocket_connect(url) as websocket:
+            handshake = websocket.receive_json()
+            assert handshake["type"] == "connected"
 
-        # Receive streamed messages until turn_complete
-        received_types = [msg1["type"]]
-        while True:
-            msg = websocket.receive_json()
-            received_types.append(msg["type"])
-            if msg["type"] in ("turn_complete", "error"):
-                break
+            # Send text input
+            websocket.send_json({"type": "text_input", "text": "Hello IRIS"})
 
-        assert "turn_complete" in received_types or "token_delta" in received_types
+            # First message should be transcript confirmation
+            msg1 = websocket.receive_json()
+            assert msg1["type"] == "transcript"
+            assert msg1["text"] == "Hello IRIS"
+            assert msg1["is_final"] is True
+
+            # Receive streamed messages until turn_complete
+            received_types = [msg1["type"]]
+            while True:
+                msg = websocket.receive_json()
+                received_types.append(msg["type"])
+                if msg["type"] in ("turn_complete", "error"):
+                    break
+
+            assert "turn_complete" in received_types or "token_delta" in received_types
 
 
 def test_websocket_malformed_payload(client):
     """Test sending malformed payload yields structured error message."""
-    with client.websocket_connect("/ws") as websocket:
+    url = f"/ws?token={auth_manager.master_key}"
+    with client.websocket_connect(url) as websocket:
         _ = websocket.receive_json()  # Handshake
 
         # Send invalid JSON string
@@ -122,7 +139,8 @@ def test_websocket_malformed_payload(client):
 
 def test_websocket_binary_frame_handling(client):
     """Test sending binary audio frame over WebSocket."""
-    with client.websocket_connect("/ws") as websocket:
+    url = f"/ws?token={auth_manager.master_key}"
+    with client.websocket_connect(url) as websocket:
         _ = websocket.receive_json()  # Handshake
 
         # Send raw PCM bytes (0-filled buffer)

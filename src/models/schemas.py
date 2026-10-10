@@ -49,6 +49,8 @@ class AgentExecutionResult(BaseModel):
     tool_name: str
     output_payload: Dict
     error: Optional[str] = None
+    confirmation_token: Optional[str] = None
+    pending_action: Optional[Dict] = None
 
 
 class StreamChunkPayload(BaseModel):
@@ -60,3 +62,4 @@ class StreamChunkPayload(BaseModel):
     session_id: str
     tool_name: Optional[str] = None
     tool_output: Optional[Dict] = None
+    confirmation_token: Optional[str] = None

@@ -135,7 +135,14 @@ class ProcessRequestPayload(BaseModel):
     prompt: str
     session_id: Optional[str] = "default-session"
     device_id: Optional[str] = "unknown"
+    confirmation_token: Optional[str] = None
     confirmed: Optional[bool] = False
+
+class ConfirmRequestPayload(BaseModel):
+    confirmation_token: str
+    user_prompt: Optional[str] = None
+    session_id: Optional[str] = "default-session"
+    device_id: Optional[str] = "unknown"
 
 @app.post("/api/orchestrator/process", dependencies=[Depends(verify_api_key)])
 async def process_orchestrator_request(payload: ProcessRequestPayload, request: Request):
@@ -147,7 +154,24 @@ async def process_orchestrator_request(payload: ProcessRequestPayload, request: 
         user_prompt=payload.prompt,
         session_id=payload.session_id or "default-session",
         device_id=payload.device_id or "unknown",
-        confirmed=bool(payload.confirmed)
+        confirmed=bool(payload.confirmed),
+        confirmation_token=payload.confirmation_token
+    )
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    return result
+
+@app.post("/api/orchestrator/confirm", dependencies=[Depends(verify_api_key)])
+async def confirm_orchestrator_request(payload: ConfirmRequestPayload, request: Request):
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    if not orchestrator:
+        return JSONResponse(status_code=500, content={"error": "Orchestrator not initialized"})
+    
+    result = orchestrator.process_request(
+        user_prompt=payload.user_prompt or "Execute pending action",
+        session_id=payload.session_id or "default-session",
+        device_id=payload.device_id or "unknown",
+        confirmation_token=payload.confirmation_token
     )
     if hasattr(result, "model_dump"):
         return result.model_dump()
@@ -158,10 +182,20 @@ async def health():
     return {"status": "ok"}
 
 
+def verify_ws_auth(websocket: WebSocket, device_id: Optional[str] = "unknown") -> bool:
+    token = (
+        websocket.query_params.get("token")
+        or websocket.query_params.get("api_key")
+        or websocket.headers.get("x-api-key")
+        or (websocket.headers.get("authorization") or "").replace("Bearer ", "").strip()
+    )
+    if not token or not auth_manager.validate_token(token, device_id=device_id):
+        return False
+    return True
+
+
 async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "unknown", session_id: Optional[str] = None):
-    # Check query param token auth
-    token = websocket.query_params.get("token") or websocket.query_params.get("api_key")
-    if token and not auth_manager.validate_token(token, device_id=device_id):
+    if not verify_ws_auth(websocket, device_id=device_id):
         await websocket.close(code=4401, reason="Unauthorized")
         return
 
@@ -321,6 +355,9 @@ async def websocket_realtime_endpoint(websocket: WebSocket, device_id: Optional[
 
 @app.websocket("/ws/voice-stream")
 async def websocket_endpoint(websocket: WebSocket):
+    if not verify_ws_auth(websocket):
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
     await websocket.accept()
     try:
         while True:
@@ -367,6 +404,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
+    if not verify_ws_auth(websocket):
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
     await websocket.accept()
     try:
         while True:

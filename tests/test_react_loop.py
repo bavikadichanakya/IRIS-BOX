@@ -60,13 +60,15 @@ async def test_react_loop_sensitive_tool_policy():
     tm = ToolManager(registry=MockSystemReg())
     loop = ReActLoop(tool_manager=tm)
 
-    # 1. Denied when confirmed=False (default)
+    # 1. Denied when confirmation_token is missing (returns confirmation token)
     res_denied = await loop.execute_step("SystemCommandTool", {"command": "ls"})
     assert res_denied.status.value == "DENIED"
     assert "CONFIRMATION_REQUIRED" in res_denied.error
+    assert res_denied.confirmation_token is not None
 
-    # 2. Allowed when confirmed=True in context
-    res_confirmed = await loop.execute_step("SystemCommandTool", {"command": "ls"}, context={"confirmed": True})
+    # 2. Allowed when valid confirmation_token is provided in context
+    token = res_denied.confirmation_token
+    res_confirmed = await loop.execute_step("SystemCommandTool", {"command": "ls"}, context={"confirmation_token": token})
     assert res_confirmed.status.value == "SUCCEEDED"
     assert res_confirmed.output == {"output": "ok"}
 

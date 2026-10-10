@@ -92,8 +92,10 @@ def test_lifespan_startup():
     test_app = FastAPI(lifespan=lifespan)
     
     with patch.dict('os.environ', {
+        'IRIS_LLM_BASE_URL': 'https://test.example.com',
         'OPENAI_API_BASE': 'https://test.example.com',
         'OPENROUTER_API_KEY': 'test_key',
+        'IRIS_LLM_MODEL': 'test-model',
         'OPENAI_MODEL': 'test-model'
     }):
         with patch('src.server.app.IRISOrchestrator') as mock_orchestrator_class:

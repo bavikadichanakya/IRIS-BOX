@@ -147,6 +147,8 @@ def test_agent_execution_result_serialization():
         "tool_name": "smart_home",
         "output_payload": {"status": "ok", "message": "light turned on"},
         "error": None,
+        "confirmation_token": None,
+        "pending_action": None,
     }
     result = AgentExecutionResult(**result_data)
     assert result.model_dump() == result_data
@@ -156,6 +158,8 @@ def test_agent_execution_result_serialization():
         "tool_name": "browser_tool",
         "output_payload": {},
         "error": "Selector not found",
+        "confirmation_token": None,
+        "pending_action": None,
     }
     result = AgentExecutionResult(**result_with_error)
     assert result.model_dump() == result_with_error

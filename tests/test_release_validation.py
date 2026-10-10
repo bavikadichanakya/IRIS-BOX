@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from src.server.app import app
+from src.models.schemas import AgentExecutionResult
 from src.security.auth import auth_manager
 from src.observability.event_bus import EventBus
 from src.storage.db import Database
@@ -31,33 +32,35 @@ async def test_end_to_end_websocket_user_journey():
     """
     master_key = auth_manager.master_key
 
-    with TestClient(app) as client:
-        ws_url = f"/v1/ws?device_id=val-pod-01&token={master_key}"
-        with client.websocket_connect(ws_url) as websocket:
-            # 1. Connected Handshake
-            handshake = websocket.receive_json()
-            assert handshake["type"] == "connected"
-            assert "session_id" in handshake
+    mock_result = AgentExecutionResult(success=True, tool_name="", output_payload={"response": "E2E_RELEASE_VALIDATION"})
+    with patch("src.agent.orchestrator.IRISOrchestrator.process_request", return_value=mock_result):
+        with TestClient(app) as client:
+            ws_url = f"/v1/ws?device_id=val-pod-01&token={master_key}"
+            with client.websocket_connect(ws_url) as websocket:
+                # 1. Connected Handshake
+                handshake = websocket.receive_json()
+                assert handshake["type"] == "connected"
+                assert "session_id" in handshake
 
-            # 2. Send Text Input requesting system command tool
-            websocket.send_json({"type": "text_input", "text": "echo E2E_RELEASE_VALIDATION"})
+                # 2. Send Text Input requesting system command tool
+                websocket.send_json({"type": "text_input", "text": "echo E2E_RELEASE_VALIDATION"})
 
-            # 3. First frame should be transcript confirmation
-            transcript_msg = websocket.receive_json()
-            assert transcript_msg["type"] == "transcript"
-            assert transcript_msg["text"] == "echo E2E_RELEASE_VALIDATION"
-            assert transcript_msg["is_final"] is True
+                # 3. First frame should be transcript confirmation
+                transcript_msg = websocket.receive_json()
+                assert transcript_msg["type"] == "transcript"
+                assert transcript_msg["text"] == "echo E2E_RELEASE_VALIDATION"
+                assert transcript_msg["is_final"] is True
 
-            # 4. Stream response until turn_complete
-            received_messages = []
-            while True:
-                msg = websocket.receive_json()
-                received_messages.append(msg)
-                if msg["type"] in ("turn_complete", "error"):
-                    break
+                # 4. Stream response until turn_complete
+                received_messages = []
+                while True:
+                    msg = websocket.receive_json()
+                    received_messages.append(msg)
+                    if msg["type"] in ("turn_complete", "error"):
+                        break
 
-            msg_types = [m["type"] for m in received_messages]
-            assert "turn_complete" in msg_types or "token_delta" in msg_types
+                msg_types = [m["type"] for m in received_messages]
+                assert "turn_complete" in msg_types or "token_delta" in msg_types
 
 
 @pytest.mark.asyncio

@@ -65,13 +65,22 @@ class Transcriber:
         if WhisperModel is not None:
             try:
                 compute_type = "float32" if self.device == "cpu" else "float16"
-                self.fw_model = WhisperModel(self.model_name, device=self.device, compute_type=compute_type)
+                try:
+                    self.fw_model = WhisperModel(
+                        self.model_name,
+                        device=self.device,
+                        compute_type=compute_type,
+                        local_files_only=True
+                    )
+                except (TypeError, Exception):
+                    self.fw_model = WhisperModel(self.model_name, device=self.device, compute_type=compute_type)
+
                 self.status = "READY"
                 self.mock_mode = False
                 logger.info(f"Loaded faster-whisper model '{self.model_name}' on {self.device}")
                 return
             except Exception as e:
-                logger.warning(f"Could not load faster-whisper model '{self.model_name}': {e}")
+                logger.warning(f"Could not load local faster-whisper model '{self.model_name}': {e}")
 
         if whisper is not None:
             try:
@@ -81,9 +90,9 @@ class Transcriber:
                 logger.info(f"Loaded Whisper model '{self.model_name}' on {self.device}")
                 return
             except Exception as e:
-                logger.warning(f"Failed to load Whisper model '{self.model_name}': {e}")
+                logger.warning(f"Failed to load local Whisper model '{self.model_name}': {e}")
 
-        logger.warning("Neither faster-whisper nor whisper is loadable, setting status to UNAVAILABLE")
+        logger.warning("Neither faster-whisper nor whisper is loadable locally, setting status to UNAVAILABLE")
         self.status = "UNAVAILABLE"
         if self.fallback_mock:
             self.mock_mode = True
