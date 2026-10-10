@@ -126,7 +126,7 @@ async def test_barge_in_cancellation():
 
 def test_stt_and_tts_unavailable_error_handling():
     # STT fallback_mock=False raises error when whisper unavailable
-    with patch("src.audio.stt.whisper", None):
+    with patch("src.audio.stt.WhisperModel", None), patch("src.audio.stt.whisper", None):
         stt = Transcriber(fallback_mock=False)
         with pytest.raises(RuntimeError, match="STT engine is UNAVAILABLE"):
             stt.transcribe_pcm(b"\x00\x00" * 100)
@@ -138,7 +138,7 @@ def test_stt_and_tts_unavailable_error_handling():
             async for _ in tts.stream_audio("Hello"):
                 pass
 
-    with pytest.raises(RuntimeError, match="edge-tts is not available"):
+    with pytest.raises(RuntimeError, match=r"(edge-tts is not available|No usable speech synthesis engine available)"):
         asyncio.run(run_tts_missing())
 
 

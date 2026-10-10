@@ -6,6 +6,7 @@ import base64
 from typing import Optional
 from contextlib import asynccontextmanager
 
+from pydantic import BaseModel
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -75,7 +76,7 @@ async def lifespan(app: FastAPI):
 
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
     fleet_mgr = FleetManager(ws_manager=ws_manager, event_bus=orchestrator.event_bus)
-    tts_eng = TTSEngine()
+    tts_eng = TTSEngine(online_fallback=False)
     voice_pipe = VoicePipeline(orchestrator=orchestrator, tts=tts_eng)
 
     app.state.db = db
@@ -129,6 +130,26 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Protected Fleet API endpoints requiring authentication
 app.include_router(fleet_router, dependencies=[Depends(verify_api_key)])
 app.include_router(fleet_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
+class ProcessRequestPayload(BaseModel):
+    prompt: str
+    session_id: Optional[str] = "default-session"
+    device_id: Optional[str] = "unknown"
+
+@app.post("/api/orchestrator/process", dependencies=[Depends(verify_api_key)])
+async def process_orchestrator_request(payload: ProcessRequestPayload, request: Request):
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    if not orchestrator:
+        return JSONResponse(status_code=500, content={"error": "Orchestrator not initialized"})
+    
+    result = orchestrator.process_request(
+        user_prompt=payload.prompt,
+        session_id=payload.session_id or "default-session",
+        device_id=payload.device_id or "unknown"
+    )
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    return result
 
 @app.get("/health")
 async def health():

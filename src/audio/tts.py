@@ -1,5 +1,6 @@
 import os
 import sys
+import shutil
 import asyncio
 import logging
 import subprocess
@@ -21,7 +22,7 @@ class TTSEngine:
         rate: str = "+0%",
         pitch: str = "+0Hz",
         cache_common_phrases: bool = False,
-        online_fallback: bool = True,
+        online_fallback: bool = False,
     ):
         self.voice = voice
         self.rate = rate
@@ -31,17 +32,50 @@ class TTSEngine:
         self._cache: Dict[str, bytes] = {}
 
     def _get_piper_path(self) -> str:
-        """Get the path to the Piper binary."""
-        return os.environ.get("PIPER_PATH", "/usr/local/bin/piper")
+        """Get the path to the Piper binary with OS auto-detection."""
+        env_path = os.environ.get("PIPER_PATH")
+        if env_path:
+            return env_path
+
+        which_path = shutil.which("piper") or shutil.which("piper.exe")
+        if which_path:
+            return which_path
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        candidates = [
+            os.path.join(base_dir, "models", "piper", "piper.exe"),
+            os.path.join(base_dir, "models", "piper", "piper"),
+            os.path.join(base_dir, "bin", "piper.exe"),
+            os.path.join(base_dir, "bin", "piper"),
+            "/usr/local/bin/piper",
+            "/usr/bin/piper",
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return "/usr/local/bin/piper"
 
     def _get_model_path(self) -> str:
-        """Get the path to the ONNX model."""
-        return os.environ.get("PIPER_MODEL_PATH", "/path/to/en_US-lessac-medium.onnx")
+        """Get the path to the ONNX voice model."""
+        env_path = os.environ.get("PIPER_MODEL_PATH")
+        if env_path:
+            return env_path
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        candidates = [
+            os.path.join(base_dir, "models", "piper", "en_US-lessac-medium.onnx"),
+            os.path.join(base_dir, "models", "en_US-lessac-medium.onnx"),
+            os.path.join(base_dir, "models", "voice.onnx"),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return "/path/to/en_US-lessac-medium.onnx"
 
     def _use_piper(self) -> bool:
         """Check if Piper is available."""
         piper_path = self._get_piper_path()
-        return bool(piper_path and os.path.exists(piper_path))
+        return bool(piper_path and (os.path.exists(piper_path) or shutil.which(piper_path)))
 
     async def _get_piper_command(
         self, text: str, voice: Optional[str] = None, rate: str = "+0%", pitch: str = "+0Hz"
@@ -49,19 +83,12 @@ class TTSEngine:
         """Construct the Piper execution command."""
         piper_path = self._get_piper_path()
         model_path = self._get_model_path()
-        voice = voice or self.voice
         return [
             piper_path,
             "--model",
             model_path,
-            "--text",
-            text,
-            "--voice",
-            voice,
-            "--rate",
-            rate,
-            "--pitch",
-            pitch,
+            "--output_file",
+            "-",
         ]
 
     async def stream_audio(
@@ -84,7 +111,7 @@ class TTSEngine:
                 raise RuntimeError("Piper not found")
 
             piper_path = self._get_piper_path()
-            if not piper_path or "nonexistent" in piper_path or (not piper_is_mocked and not os.path.exists(piper_path)):
+            if not piper_path or "nonexistent" in piper_path or (not piper_is_mocked and not os.path.exists(piper_path) and not shutil.which(piper_path)):
                 raise RuntimeError("Piper binary not found")
 
             model_path = self._get_model_path()
@@ -93,8 +120,14 @@ class TTSEngine:
 
             command = await self._get_piper_command(text, voice, self.rate, self.pitch)
             try:
-                # Capture output as raw binary bytes (text=False)
-                proc = subprocess.run(command, capture_output=True, text=False, check=True)
+                # Capture output as raw binary bytes from stdin piping
+                proc = subprocess.run(
+                    command,
+                    input=text.encode("utf-8"),
+                    capture_output=True,
+                    text=False,
+                    check=True
+                )
                 audio_data = proc.stdout
                 if not audio_data:
                     raise RuntimeError("Piper generated empty audio buffer")

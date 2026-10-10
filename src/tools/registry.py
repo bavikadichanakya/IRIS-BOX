@@ -130,31 +130,23 @@ class HomeAssistantTool(BaseTool):
     """
     Dispatches local REST requests to Home Assistant with token auth.
     """
-    def __init__(self, ha_url: str = "", ha_token: str = "", mock_mode: bool = False):
+    def __init__(self, ha_url: str = "", ha_token: str = ""):
         env_ha_url = os.environ.get("HA_URL", "")
         env_ha_token = os.environ.get("HA_TOKEN", "")
         self.ha_url = ha_url or env_ha_url
         self.ha_token = ha_token or env_ha_token
-        self.mock_mode = mock_mode
         self.headers = {
             "Authorization": f"Bearer {self.ha_token}",
             "Content-Type": "application/json",
         }
 
     def execute(self, action_payload: SmartHomeAction) -> AgentExecutionResult:
-        if self.mock_mode:
-            return AgentExecutionResult(
-                success=True,
-                tool_name="HomeAssistantTool",
-                output_payload={"message": "Mock HA call successful."},
-            )
-
         if not self.ha_url or not self.ha_token:
             return AgentExecutionResult(
                 success=False,
                 tool_name="HomeAssistantTool",
                 output_payload={},
-                error="Home Assistant credentials missing or unreachable",
+                error="Home Assistant unavailable: credentials missing or connection refused",
             )
 
         try:
@@ -171,19 +163,12 @@ class HomeAssistantTool(BaseTool):
                 tool_name="HomeAssistantTool",
                 output_payload=response.json() if response.content else {"message": "Service call successful"},
             )
-        except requests.exceptions.RequestException as e:
+        except Exception:
             return AgentExecutionResult(
                 success=False,
                 tool_name="HomeAssistantTool",
                 output_payload={},
-                error="Home Assistant credentials missing or unreachable",
-            )
-        except Exception as e:
-            return AgentExecutionResult(
-                success=False,
-                tool_name="HomeAssistantTool",
-                output_payload={},
-                error=f"Home Assistant credentials missing or unreachable ({type(e).__name__}: {e})",
+                error="Home Assistant unavailable: credentials missing or connection refused",
             )
 
 

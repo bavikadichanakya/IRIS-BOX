@@ -25,7 +25,7 @@ class TestTTSEngine:
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
-                engine = TTSEngine()
+                engine = TTSEngine(online_fallback=True)
                 chunks = []
                 async for chunk in engine.stream_audio("Hello world"):
                     chunks.append(chunk)
@@ -45,7 +45,7 @@ class TestTTSEngine:
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
-                engine = TTSEngine()
+                engine = TTSEngine(online_fallback=True)
                 engine._cache["Hello"] = b"cached_audio"  # preÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Ëœseed cache
 
                 chunks = []
@@ -66,7 +66,7 @@ class TestTTSEngine:
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
-                engine = TTSEngine()
+                engine = TTSEngine(online_fallback=True)
                 async for _ in engine.stream_audio("Test", voice="en-GB-SoniaNeural"):
                     pass
                 return mock_edge_tts
@@ -84,7 +84,7 @@ class TestTTSEngine:
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
-                engine = TTSEngine(rate="+20%", pitch="+100Hz")
+                engine = TTSEngine(rate="+20%", pitch="+100Hz", online_fallback=True)
                 async for _ in engine.stream_audio("Modulate"):
                     pass
                 return mock_edge_tts
@@ -102,7 +102,7 @@ class TestTTSEngine:
 
             with patch("src.audio.tts.edge_tts") as mock_edge_tts:
                 mock_edge_tts.Communicate.return_value = mock_communicate
-                engine = TTSEngine()
+                engine = TTSEngine(online_fallback=True)
                 result = await engine.speak("Hello")
                 return result
 
@@ -113,7 +113,7 @@ class TestTTSEngine:
         """Test that a RuntimeError is raised when edge-tts is missing."""
         async def _test():
             with patch("src.audio.tts.edge_tts", None):
-                engine = TTSEngine()
+                engine = TTSEngine(online_fallback=True)
                 async for _ in engine.stream_audio("Hi"):
                     pass
 
@@ -165,18 +165,12 @@ class TestTTSEngine:
                         engine = TTSEngine()
                         command = await engine._get_piper_command("Hello", "en-US-AriaNeural", "+0%", "+0Hz")
                         expected_command = [
-                        "/usr/local/bin/piper",
-                        "--model",
-                        "/path/to/en_US-lessac-medium.onnx",
-                        "--text",
-                        "Hello",
-                        "--voice",
-                        "en-US-AriaNeural",
-                        "--rate",
-                        "+0%",
-                        "--pitch",
-                        "+0Hz",
-                    ]
-                    assert command == expected_command
+                            "/usr/local/bin/piper",
+                            "--model",
+                            "/path/to/en_US-lessac-medium.onnx",
+                            "--output_file",
+                            "-",
+                        ]
+                        assert command == expected_command
 
         asyncio.run(_test())

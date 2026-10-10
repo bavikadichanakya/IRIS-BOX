@@ -55,6 +55,8 @@ class StreamChunkPayload(BaseModel):
     """
     Schema for a streaming chunk.
     """
-    chunk_type: Literal["text_delta", "tool_call", "complete"]
-    delta_text: str
+    chunk_type: Literal["text_delta", "tool_call", "tool_result", "complete"]
+    delta_text: str = ""
     session_id: str
+    tool_name: Optional[str] = None
+    tool_output: Optional[Dict] = None

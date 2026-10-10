@@ -39,7 +39,7 @@ def test_wakeword_onnx_model_file_presence():
 
 def test_stt_transcriber_no_silent_mock_in_production():
     """Verify Transcriber raises RuntimeError in production mode (fallback_mock=False) when whisper unavailable."""
-    with patch("src.audio.stt.whisper", None):
+    with patch("src.audio.stt.WhisperModel", None), patch("src.audio.stt.whisper", None):
         t = Transcriber(fallback_mock=False)
         assert t.status == "UNAVAILABLE"
         assert t.mock_mode is False

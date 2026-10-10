@@ -126,7 +126,7 @@ async def test_end_to_end_voice_pipeline_integration():
     assert detector.model_path is not None
     assert os.path.exists(detector.model_path)
 
-    tts_engine = TTSEngine()
+    tts_engine = TTSEngine(online_fallback=True)
     audio_stream = tts_engine.stream_audio("Testing voice pipeline synthesis")
     chunks = []
     async for chunk in audio_stream:
@@ -147,3 +147,67 @@ def test_hardware_dependent_device_skip_gate():
 
     # Hardware test assertion if environment supports physical devices
     assert True
+
+
+@pytest.mark.asyncio
+async def test_strict_offline_llm_endpoint_rejection():
+    """
+    Verifies that configuring a remote/cloud LLM endpoint without IRIS_ALLOW_CLOUD=1 raises SecurityError.
+    """
+    from src.agent.orchestrator import SecurityError
+    with pytest.raises(SecurityError, match="Strict offline policy violation"):
+        IRISOrchestrator(api_base="https://openrouter.ai/api/v1", api_key="test-key")
+
+
+@pytest.mark.asyncio
+async def test_multistep_streaming_react_loop():
+    """
+    Verifies that stream_request executes a tool and feeds its output back into reasoning.
+    """
+    orchestrator = IRISOrchestrator(api_base="http://127.0.0.1:11434/v1", api_key="ollama")
+
+    class MockDelta:
+        def __init__(self, content=None, tool_calls=None):
+            self.content = content
+            self.tool_calls = tool_calls
+
+    class MockChoice:
+        def __init__(self, delta):
+            self.delta = delta
+
+    class MockChunk:
+        def __init__(self, delta):
+            self.choices = [MockChoice(delta)]
+
+    class MockFunction:
+        def __init__(self, name, arguments):
+            self.name = name
+            self.arguments = arguments
+
+    class MockToolCall:
+        def __init__(self, name, arguments, call_id="call_1"):
+            self.id = call_id
+            self.function = MockFunction(name, arguments)
+
+    # Turn 1 emits tool call, Turn 2 emits final text
+    async def mock_stream_turn_1():
+        yield MockChunk(MockDelta(tool_calls=[MockToolCall("SystemCommandTool", '{"command": "echo RE_STEP_1", "action_type": "terminal"}')]))
+
+    async def mock_stream_turn_2():
+        yield MockChunk(MockDelta(content="Done executing step 1"))
+
+    streams = [mock_stream_turn_1(), mock_stream_turn_2()]
+
+    def fake_stream_with_recovery(_create_stream, **kwargs):
+        return streams.pop(0)
+
+    with patch.object(orchestrator.resilient_provider, "stream_with_recovery", side_effect=fake_stream_with_recovery):
+        chunks = []
+        async for chunk in orchestrator.stream_request("Run multi-step test"):
+            chunks.append(chunk)
+
+        chunk_types = [c.chunk_type for c in chunks]
+        assert "tool_call" in chunk_types
+        assert "tool_result" in chunk_types
+        assert "text_delta" in chunk_types
+        assert "complete" in chunk_types

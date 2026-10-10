@@ -80,59 +80,29 @@ class TestHomeAssistantTool(unittest.TestCase):
         self.ha_url = "http://localhost:8123"
         self.ha_token = "test_token"
         self.tool = HomeAssistantTool(ha_url=self.ha_url, ha_token=self.ha_token)
-        self.mock_tool = HomeAssistantTool(ha_url="", ha_token="", mock_mode=True)
+        self.unauth_tool = HomeAssistantTool(ha_url="", ha_token="")
 
-    def test_init_explicit_mock_mode_no_credentials(self):
-        tool = HomeAssistantTool(ha_url="", ha_token="", mock_mode=True)
-        self.assertTrue(tool.mock_mode)
-
-    def test_init_auto_mock_mode_when_credentials_missing(self):
-        with patch.dict(os.environ, {}, clear=True):
-            tool = HomeAssistantTool()
-            self.assertFalse(tool.mock_mode)
-            self.assertEqual(tool.ha_url, "")
-            self.assertEqual(tool.ha_token, "")
-
-    def test_init_auto_mock_mode_when_credentials_partial(self):
-        with patch.dict(os.environ, {}, clear=True):
-            tool = HomeAssistantTool(ha_url="http://localhost:8123")
-            self.assertFalse(tool.mock_mode)
-
-        with patch.dict(os.environ, {}, clear=True):
-            tool = HomeAssistantTool(ha_token="some_token")
-            self.assertFalse(tool.mock_mode)
-
-    def test_init_explicit_non_mock_mode_with_credentials(self):
-        tool = HomeAssistantTool(ha_url=self.ha_url, ha_token=self.ha_token, mock_mode=False)
-        self.assertFalse(tool.mock_mode)
-        self.assertEqual(tool.ha_url, self.ha_url)
-        self.assertEqual(tool.ha_token, self.ha_token)
-
-    def test_init_explicit_non_mock_mode_missing_credentials_raises(self):
+    def test_init_missing_credentials_fails_closed(self):
         action_payload = SmartHomeAction(entity_id="light.bedroom", domain="light", action="on")
-        tool1 = HomeAssistantTool(ha_url="", ha_token="token", mock_mode=False)
-        res1 = tool1.execute(action_payload)
+        res1 = self.unauth_tool.execute(action_payload)
         self.assertFalse(res1.success)
-        self.assertIn("Home Assistant credentials missing", res1.error)
+        self.assertIn("Home Assistant unavailable", res1.error)
 
     def test_init_from_env_vars_when_no_args(self):
         with patch.dict(os.environ, {"HA_URL": "http://env-url", "HA_TOKEN": "env-token"}):
             tool = HomeAssistantTool()
-            self.assertFalse(tool.mock_mode)
             self.assertEqual(tool.ha_url, "http://env-url")
             self.assertEqual(tool.ha_token, "env-token")
 
     def test_init_env_vars_override_empty_args(self):
         with patch.dict(os.environ, {"HA_URL": "http://env-url", "HA_TOKEN": "env-token"}):
             tool = HomeAssistantTool(ha_url="", ha_token="")
-            self.assertFalse(tool.mock_mode)
             self.assertEqual(tool.ha_url, "http://env-url")
             self.assertEqual(tool.ha_token, "env-token")
 
     def test_init_args_override_env_vars(self):
         with patch.dict(os.environ, {"HA_URL": "http://env-url", "HA_TOKEN": "env-token"}):
             tool = HomeAssistantTool(ha_url="http://arg-url", ha_token="arg-token")
-            self.assertFalse(tool.mock_mode)
             self.assertEqual(tool.ha_url, "http://arg-url")
             self.assertEqual(tool.ha_token, "arg-token")
 
@@ -182,7 +152,7 @@ class TestHomeAssistantTool(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertEqual(result.tool_name, "HomeAssistantTool")
-        self.assertIn("unreachable", result.error.lower())
+        self.assertIn("Home Assistant unavailable", result.error)
         mock_post.assert_called_once()
 
     @patch('requests.post')
@@ -198,23 +168,8 @@ class TestHomeAssistantTool(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertEqual(result.tool_name, "HomeAssistantTool")
-        self.assertIn("unreachable", result.error.lower())
+        self.assertIn("Home Assistant unavailable", result.error)
         mock_post.assert_called_once()
-
-    @patch('requests.post')
-    def test_execute_mock_mode(self, mock_post):
-        action_payload = SmartHomeAction(
-            entity_id="light.bedroom",
-            domain="light",
-            action="on"
-        )
-        result = self.mock_tool.execute(action_payload)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.tool_name, "HomeAssistantTool")
-        self.assertEqual(result.output_payload, {"message": "Mock HA call successful."})
-        self.assertIsNone(result.error)
-        mock_post.assert_not_called()
 
 
 class TestSystemCommandTool(unittest.TestCase):

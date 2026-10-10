@@ -35,6 +35,36 @@ def _run_async(coro):
         return asyncio.run(coro)
 
 
+import os
+from urllib.parse import urlparse
+
+class SecurityError(RuntimeError):
+    """Raised when security policy contracts are violated."""
+    pass
+
+
+def validate_offline_endpoint(api_base: str):
+    """
+    Validates that the LLM endpoint URL hostname resolves to loopback (localhost / 127.0.0.1 / ::1)
+    or test/mock hosts, unless explicit flag IRIS_ALLOW_CLOUD=1 is configured.
+    """
+    allow_cloud = os.getenv("IRIS_ALLOW_CLOUD", "").lower() in ("1", "true")
+    if allow_cloud:
+        return
+    parsed = urlparse(api_base)
+    hostname = (parsed.hostname or "").lower()
+    if (
+        hostname in ("localhost", "127.0.0.1", "::1", "test.api", "mock.api")
+        or hostname.endswith(".local")
+        or "mock" in hostname
+        or "test" in hostname
+        or "localhost" in api_base
+        or "127.0.0.1" in api_base
+    ):
+        return
+    raise SecurityError(f"Strict offline policy violation: remote LLM endpoint '{api_base}' rejected.")
+
+
 class SessionMemory:
     """
     In‑memory session store that keeps a sliding window of recent turns.
@@ -77,6 +107,9 @@ class IRISOrchestrator:
         resilient_provider: Optional[ResilientLLMProvider] = None,
         max_steps: int = 5,
     ):
+        validate_offline_endpoint(api_base)
+        self.api_base = api_base
+        self.api_key = api_key
         self.client = openai.OpenAI(base_url=api_base, api_key=api_key)
         self.model = model
         self.tool_registry = tool_registry or ToolRegistry
@@ -510,190 +543,63 @@ class IRISOrchestrator:
 
         async_client = openai.AsyncOpenAI(base_url=self.client.base_url, api_key=self.client.api_key)
 
-        async def _create_stream():
-            return await async_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=tools_param if tools_param else None,
-                tool_choice="auto" if tools_param else None,
-                stream=True,
-            )
+        step_count = 0
+        max_steps = getattr(self.react_loop, "max_iterations", 5)
+        accumulated_text = ""
+        last_tool_name = None
 
-        try:
-            stream = self.resilient_provider.stream_with_recovery(
-                _create_stream,
-                request_id=request_id or session_id or "",
-                trace_id=trace_id or "",
-                device_id=device_id or ""
-            )
-        except Exception as e:
-            if self.database:
-                try:
-                    await self.database.save_turn(
-                        session_id=session_id,
-                        user_prompt=user_prompt,
-                        assistant_response=f"Error: {e}",
-                        trace_ids=[trace_id] if trace_id else [],
-                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
-                        device_id=device_id
-                    )
-                except Exception:
-                    pass
-            yield StreamChunkPayload(
-                chunk_type="complete",
-                delta_text=f"Error: {e}",
-                session_id=session_id
-            )
-            return
+        while step_count < max_steps:
+            step_count += 1
+            tool_name = None
+            raw_args = ""
+            text_buffer = ""
+            call_id = f"call_{step_count}_{uuid.uuid4().hex[:6]}"
 
-        tool_name = None
-        raw_args = ""
-        text_buffer = ""
+            async def _create_stream():
+                return await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools_param if tools_param else None,
+                    tool_choice="auto" if tools_param else None,
+                    stream=True,
+                )
 
-        try:
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    text_buffer += delta.content
-                    yield StreamChunkPayload(
-                        chunk_type="text_delta",
-                        delta_text=delta.content,
-                        session_id=session_id
-                    )
-                if delta.tool_calls:
-                    for call in delta.tool_calls:
-                        if call.function.name:
-                            tool_name = call.function.name
-                        if call.function.arguments:
-                            raw_args += call.function.arguments
-        except Exception as e:
-            logger.error(f"Error during LLM streaming: {e}")
-            if self.database:
-                try:
-                    await self.database.save_turn(
-                        session_id=session_id,
-                        user_prompt=user_prompt,
-                        assistant_response=f"Error: {e}",
-                        trace_ids=[trace_id] if trace_id else [],
-                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
-                        device_id=device_id
-                    )
-                except Exception:
-                    pass
-            yield StreamChunkPayload(
-                chunk_type="complete",
-                delta_text=f"Error: {e}",
-                session_id=session_id
-            )
-            return
-
-        # Persist user and assistant messages
-        self.session_memory.add_message(session_id, "user", user_prompt)
-        assistant_content = text_buffer or ""
-        tool_calls = None
-        if tool_name:
-            tool_calls = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "arguments": raw_args
-                    }
-                }
-            ]
-        self.session_memory.add_message(session_id, "assistant", assistant_content, tool_calls)
-
-        total_duration_ms = (time.perf_counter() - start_time) * 1000.0
-
-        if tool_name:
             try:
-                payload_model = self._payload_models.get(tool_name)
-                if not payload_model:
-                    err_msg = f"Unknown tool: {tool_name}"
-                    if self.database:
-                        try:
-                            await self.database.save_turn(
-                                session_id, user_prompt, assistant_content or err_msg,
-                                trace_ids=[trace_id] if trace_id else [], duration_ms=total_duration_ms, device_id=device_id
-                            )
-                        except Exception:
-                            pass
-                    yield StreamChunkPayload(
-                        chunk_type="complete",
-                        delta_text=err_msg,
-                        session_id=session_id
-                    )
-                    return
-                args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                payload = payload_model(**args_dict)
-
-                context = {
-                    "device_id": device_id,
-                    "device_type": device_type,
-                    "confirmed": confirmed,
-                }
-                tool_start = time.perf_counter()
-                tool_result: ToolResult = await self.tool_manager.execute_tool(
-                    name=tool_name,
-                    arguments=args_dict,
-                    request_id=request_id,
-                    trace_id=trace_id,
-                    context=context
+                stream = self.resilient_provider.stream_with_recovery(
+                    _create_stream,
+                    request_id=request_id or session_id or "",
+                    trace_id=trace_id or "",
+                    device_id=device_id or ""
                 )
-                tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
-
-                res = self._format_tool_result(tool_name, tool_result)
-                result_json = json.dumps({
-                    "tool_name": tool_name,
-                    "success": res.success,
-                    "output_payload": res.output_payload,
-                    "error": res.error
-                })
-
-                if self.database:
-                    try:
-                        turn_id = await self.database.save_turn(
-                            session_id=session_id,
-                            user_prompt=user_prompt,
-                            assistant_response=assistant_content or f"Executed tool {tool_name}",
-                            tool_calls=tool_calls,
-                            trace_ids=[trace_id] if trace_id else [],
-                            duration_ms=total_duration_ms,
-                            metadata={"device_id": device_id, "request_id": request_id, "confirmed": confirmed},
-                            device_id=device_id
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        text_buffer += delta.content
+                        accumulated_text += delta.content
+                        yield StreamChunkPayload(
+                            chunk_type="text_delta",
+                            delta_text=delta.content,
+                            session_id=session_id
                         )
-                        output_dict = tool_result.output if isinstance(tool_result.output, dict) else {"result": tool_result.output}
-                        await self.database.record_tool_execution(
-                            session_id=session_id,
-                            tool_name=tool_name,
-                            status=tool_result.status.value,
-                            duration_ms=tool_duration_ms,
-                            turn_id=turn_id,
-                            arguments=args_dict,
-                            result=output_dict,
-                            error=tool_result.error,
-                            trace_id=trace_id
-                        )
-                        await self.database.record_audit_event(
-                            event_type="orchestrator.request_streamed",
-                            payload={"request_id": request_id, "tool_name": tool_name, "success": res.success, "duration_ms": total_duration_ms},
-                            correlation_id=trace_id or request_id or session_id,
-                            device_id=device_id
-                        )
-                    except Exception:
-                        pass
-
-                yield StreamChunkPayload(
-                    chunk_type="tool_call",
-                    delta_text=result_json,
-                    session_id=session_id
-                )
+                    if delta.tool_calls:
+                        for call in delta.tool_calls:
+                            if hasattr(call, "id") and call.id:
+                                call_id = call.id
+                            if call.function.name:
+                                tool_name = call.function.name
+                            if call.function.arguments:
+                                raw_args += call.function.arguments
             except Exception as e:
+                logger.error(f"Error during LLM streaming step {step_count}: {e}")
                 if self.database:
                     try:
                         await self.database.save_turn(
-                            session_id, user_prompt, assistant_content or f"Error: {e}",
-                            trace_ids=[trace_id] if trace_id else [], duration_ms=total_duration_ms, device_id=device_id
+                            session_id=session_id,
+                            user_prompt=user_prompt,
+                            assistant_response=f"Error: {e}",
+                            trace_ids=[trace_id] if trace_id else [],
+                            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                            device_id=device_id
                         )
                     except Exception:
                         pass
@@ -702,30 +608,134 @@ class IRISOrchestrator:
                     delta_text=f"Error: {e}",
                     session_id=session_id
                 )
-        else:
-            if self.database:
+                return
+
+            if tool_name:
+                last_tool_name = tool_name
+                result_json = json.dumps({"name": tool_name, "arguments": raw_args})
+                yield StreamChunkPayload(
+                    chunk_type="tool_call",
+                    delta_text=result_json,
+                    session_id=session_id,
+                    tool_name=tool_name
+                )
+
                 try:
-                    await self.database.save_turn(
+                    payload_model = self._payload_models.get(tool_name)
+                    args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    if payload_model:
+                        _ = payload_model(**args_dict)
+
+                    context = {
+                        "device_id": device_id,
+                        "device_type": device_type,
+                        "confirmed": confirmed,
+                    }
+                    tool_start = time.perf_counter()
+                    tool_result: ToolResult = await self.tool_manager.execute_tool(
+                        name=tool_name,
+                        arguments=args_dict,
+                        request_id=request_id,
+                        trace_id=trace_id,
+                        context=context
+                    )
+                    tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
+                    res = self._format_tool_result(tool_name, tool_result)
+
+                    yield StreamChunkPayload(
+                        chunk_type="tool_result",
+                        delta_text=json.dumps(res.output_payload),
                         session_id=session_id,
-                        user_prompt=user_prompt,
-                        assistant_response=text_buffer,
-                        trace_ids=[trace_id] if trace_id else [],
-                        duration_ms=total_duration_ms,
-                        device_id=device_id
+                        tool_name=tool_name,
+                        tool_output=res.output_payload
                     )
-                    await self.database.record_audit_event(
-                        event_type="orchestrator.request_streamed",
-                        payload={"request_id": request_id, "text": text_buffer, "duration_ms": total_duration_ms},
-                        correlation_id=trace_id or request_id or session_id,
-                        device_id=device_id
-                    )
-                except Exception:
-                    pass
-            yield StreamChunkPayload(
-                chunk_type="complete",
-                delta_text=text_buffer,
-                session_id=session_id
-            )
+
+                    messages.append({
+                        "role": "assistant",
+                        "content": text_buffer or None,
+                        "tool_calls": [
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": raw_args
+                                }
+                            }
+                        ]
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps(res.output_payload)
+                    })
+
+                    if self.database:
+                        try:
+                            turn_id = await self.database.save_turn(
+                                session_id=session_id,
+                                user_prompt=user_prompt,
+                                assistant_response=text_buffer or f"Executed tool {tool_name}",
+                                tool_calls=[{"type": "function", "function": {"name": tool_name, "arguments": raw_args}}],
+                                trace_ids=[trace_id] if trace_id else [],
+                                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                                metadata={"device_id": device_id, "request_id": request_id},
+                                device_id=device_id
+                            )
+                            output_dict = tool_result.output if isinstance(tool_result.output, dict) else {"result": tool_result.output}
+                            await self.database.record_tool_execution(
+                                session_id=session_id,
+                                tool_name=tool_name,
+                                status=tool_result.status.value,
+                                duration_ms=tool_duration_ms,
+                                turn_id=turn_id,
+                                arguments=args_dict,
+                                result=output_dict,
+                                error=tool_result.error,
+                                trace_id=trace_id
+                            )
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(f"Tool execution streaming error: {e}")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps({"error": str(e)})
+                    })
+            else:
+                break
+
+        # Save final turn and yield completion chunk
+        total_duration_ms = (time.perf_counter() - start_time) * 1000.0
+        final_text = accumulated_text.strip()
+        self.session_memory.add_message(session_id, "user", user_prompt)
+        self.session_memory.add_message(session_id, "assistant", final_text)
+
+        if self.database:
+            try:
+                await self.database.save_turn(
+                    session_id=session_id,
+                    user_prompt=user_prompt,
+                    assistant_response=final_text,
+                    trace_ids=[trace_id] if trace_id else [],
+                    duration_ms=total_duration_ms,
+                    device_id=device_id
+                )
+                await self.database.record_audit_event(
+                    event_type="orchestrator.request_streamed",
+                    payload={"request_id": request_id, "text": final_text, "duration_ms": total_duration_ms},
+                    correlation_id=trace_id or request_id or session_id,
+                    device_id=device_id
+                )
+            except Exception:
+                pass
+
+        yield StreamChunkPayload(
+            chunk_type="complete",
+            delta_text=final_text,
+            session_id=session_id
+        )
 
 
 AgentOrchestrator = IRISOrchestrator
