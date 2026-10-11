@@ -32,7 +32,11 @@ async def test_end_to_end_websocket_user_journey():
     """
     master_key = auth_manager.master_key
 
-    mock_result = AgentExecutionResult(success=True, tool_name="", output_payload={"response": "E2E_RELEASE_VALIDATION"})
+    mock_result = AgentExecutionResult(
+        success=True,
+        tool_name="SystemCommandTool",
+        output_payload={"stdout": "E2E_RELEASE_VALIDATION\n", "response": "Executed command echo E2E_RELEASE_VALIDATION"}
+    )
     with patch("src.agent.orchestrator.IRISOrchestrator.process_request", return_value=mock_result):
         with TestClient(app) as client:
             ws_url = f"/v1/ws?device_id=val-pod-01&token={master_key}"
@@ -61,6 +65,74 @@ async def test_end_to_end_websocket_user_journey():
 
                 msg_types = [m["type"] for m in received_messages]
                 assert "turn_complete" in msg_types or "token_delta" in msg_types
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_orchestration_loop():
+    """
+    Release Validation E2E: Verifies multi-step ReAct orchestration loop in process_request:
+    Model calls SystemCommandTool -> Executed with real stdout side effect -> Output fed back to LLM -> Final text synthesis references stdout.
+    """
+    from src.tools.registry import SystemCommandTool
+    ToolRegistry._tool_classes["SystemCommandTool"] = SystemCommandTool
+    orchestrator = IRISOrchestrator(api_base="http://127.0.0.1:11434/v1", api_key="ollama")
+
+    class MockChoice:
+        def __init__(self, message):
+            self.message = message
+
+    class MockResponse:
+        def __init__(self, message):
+            self.choices = [MockChoice(message)]
+
+    class MockFunction:
+        def __init__(self, name, arguments):
+            self.name = name
+            self.arguments = arguments
+
+    class MockToolCall:
+        def __init__(self, name, arguments, call_id="call_1"):
+            self.id = call_id
+            self.function = MockFunction(name, arguments)
+
+    # Turn 1: LLM invokes SystemCommandTool with echo command
+    msg1 = MagicMock()
+    msg1.content = ""
+    msg1.tool_calls = [MockToolCall("SystemCommandTool", json.dumps({"command": "echo E2E_REACT_PARITY_TEST", "action_type": "terminal"}))]
+    msg1.function_call = None
+    resp1 = MockResponse(msg1)
+
+    # Turn 2: LLM receives tool result and produces final synthesis referencing stdout
+    msg2 = MagicMock()
+    msg2.content = "Command execution completed successfully. Output: E2E_REACT_PARITY_TEST"
+    msg2.tool_calls = None
+    msg2.function_call = None
+    resp2 = MockResponse(msg2)
+
+    responses = [resp1, resp2]
+
+    def fake_execute_with_recovery_sync(_call_completion, **kwargs):
+        return responses.pop(0)
+
+    with patch.object(orchestrator.resilient_provider, "execute_with_recovery_sync", side_effect=fake_execute_with_recovery_sync):
+        result = orchestrator.process_request(
+            user_prompt="Run echo E2E_REACT_PARITY_TEST",
+            session_id="e2e-parity-sess",
+            device_id="pod-01",
+            confirmed=True
+        )
+
+        # 1. Assert overall success and tool identification
+        assert result.success is True
+        assert result.tool_name == "SystemCommandTool"
+
+        # 2. Assert tool side effects are verified (stdout returned by executed SystemCommandTool)
+        assert "stdout" in result.output_payload
+        assert "E2E_REACT_PARITY_TEST" in result.output_payload["stdout"]
+
+        # 3. Assert final conversational text directly references tool output
+        assert "response" in result.output_payload
+        assert "E2E_REACT_PARITY_TEST" in result.output_payload["response"]
 
 
 @pytest.mark.asyncio

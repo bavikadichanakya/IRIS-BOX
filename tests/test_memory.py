@@ -71,43 +71,47 @@ def test_process_request_retains_context(orchestrator):
                 output_payload={"result": "ok"}
             )
 
-    ToolRegistry._tool_classes.clear()
-    ToolRegistry.register_tool("DummyTool")(DummyTool)
+    original_classes = ToolRegistry._tool_classes.copy()
+    try:
+        ToolRegistry._tool_classes.clear()
+        ToolRegistry.register_tool("DummyTool")(DummyTool)
 
-    with patch.object(orchestrator.client.chat.completions, 'create') as mock_create:
-        # First call returns a tool call for DummyTool
-        first_message = FakeMessage(
-            content="",
-            tool_calls=[
-                FakeToolCall(id="1", function=FakeFunction(name="DummyTool", arguments="{}"))
-            ]
-        )
-        first_response = FakeResponse(first_message)
-        mock_create.return_value = first_response
+        with patch.object(orchestrator.client.chat.completions, 'create') as mock_create:
+            # Turn 1: Step 1 returns tool call for DummyTool; Step 2 returns final synthesis
+            resp1_step1 = FakeResponse(FakeMessage(
+                content="",
+                tool_calls=[
+                    FakeToolCall(id="1", function=FakeFunction(name="DummyTool", arguments="{}"))
+                ]
+            ))
+            resp1_step2 = FakeResponse(FakeMessage(
+                content="Action completed.",
+                tool_calls=None
+            ))
 
-        result1 = orchestrator.process_request("Hi", session_id="test_session")
-        assert result1.success
+            # Turn 2: Step 1 returns assistant textual response answering question
+            resp2_step1 = FakeResponse(FakeMessage(
+                content="You said Hi.",
+                tool_calls=None
+            ))
 
-        # Second call – we expect the messages to include the previous user and assistant turns
-        second_message = FakeMessage(
-            content="",
-            tool_calls=[
-                FakeToolCall(id="2", function=FakeFunction(name="DummyTool", arguments="{}"))
-            ]
-        )
-        second_response = FakeResponse(second_message)
-        mock_create.return_value = second_response
+            mock_create.side_effect = [resp1_step1, resp1_step2, resp2_step1]
 
-        result2 = orchestrator.process_request("What did I just say?", session_id="test_session")
-        assert result2.success
+            result1 = orchestrator.process_request("Hi", session_id="test_session")
+            assert result1.success
 
-        # Inspect the messages passed to the second call
-        args, kwargs = mock_create.call_args
-        messages = kwargs.get("messages", [])
-        # The system prompt is first, then history, then new user message
-        assert any(m["role"] == "user" and m["content"] == "Hi" for m in messages)
-        assert any(m["role"] == "assistant" for m in messages)
-        assert messages[-1]["role"] == "user" and messages[-1]["content"] == "What did I just say?"
+            result2 = orchestrator.process_request("What did I just say?", session_id="test_session")
+            assert result2.success
+
+            # Inspect the messages passed to the second call
+            args, kwargs = mock_create.call_args
+            messages = kwargs.get("messages", [])
+            # The system prompt is first, then history, then new user message
+            assert any(m["role"] == "user" and m["content"] == "Hi" for m in messages)
+            assert any(m["role"] == "assistant" for m in messages)
+            assert messages[-1]["role"] == "user" and messages[-1]["content"] == "What did I just say?"
+    finally:
+        ToolRegistry._tool_classes = original_classes
 
 
 def test_stream_request_retains_context(orchestrator):

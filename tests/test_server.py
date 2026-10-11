@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from src.server.app import app, lifespan
 from src.models.schemas import AgentExecutionResult, VoiceCommandPayload
 from src.agent.orchestrator import IRISOrchestrator
+from src.security.auth import auth_manager
 
 
 @pytest.fixture
@@ -30,7 +31,8 @@ def test_health_check():
 
 def test_websocket_valid_payload(mock_orchestrator):
     client = TestClient(app)
-    with client.websocket_connect("/ws/voice-stream") as websocket:
+    ws_url = f"/ws/voice-stream?token={auth_manager.master_key}"
+    with client.websocket_connect(ws_url) as websocket:
         payload = {
             "raw_transcript": "test transcript",
             "confidence": 0.9,
@@ -44,7 +46,8 @@ def test_websocket_valid_payload(mock_orchestrator):
 
 def test_websocket_invalid_json(mock_orchestrator):
     client = TestClient(app)
-    with client.websocket_connect("/ws/voice-stream") as websocket:
+    ws_url = f"/ws/voice-stream?token={auth_manager.master_key}"
+    with client.websocket_connect(ws_url) as websocket:
         websocket.send_text("invalid json")
         response = websocket.receive_json()
         assert "error" in response
@@ -53,7 +56,8 @@ def test_websocket_invalid_json(mock_orchestrator):
 
 def test_websocket_invalid_payload(mock_orchestrator):
     client = TestClient(app)
-    with client.websocket_connect("/ws/voice-stream") as websocket:
+    ws_url = f"/ws/voice-stream?token={auth_manager.master_key}"
+    with client.websocket_connect(ws_url) as websocket:
         # Missing required fields
         payload = {"raw_transcript": "test"}
         websocket.send_json(payload)
@@ -67,7 +71,8 @@ def test_websocket_orchestrator_not_initialized():
     if hasattr(app.state, "orchestrator"):
         del app.state.orchestrator
     client = TestClient(app)
-    with client.websocket_connect("/ws/voice-stream") as websocket:
+    ws_url = f"/ws/voice-stream?token={auth_manager.master_key}"
+    with client.websocket_connect(ws_url) as websocket:
         payload = {
             "raw_transcript": "test transcript",
             "confidence": 0.9,
@@ -81,7 +86,8 @@ def test_websocket_orchestrator_not_initialized():
 
 def test_websocket_ping_pong(mock_orchestrator):
     client = TestClient(app)
-    with client.websocket_connect("/ws/voice-stream") as websocket:
+    ws_url = f"/ws/voice-stream?token={auth_manager.master_key}"
+    with client.websocket_connect(ws_url) as websocket:
         websocket.send_json({"type": "ping"})
         response = websocket.receive_json()
         assert response == {"type": "pong"}

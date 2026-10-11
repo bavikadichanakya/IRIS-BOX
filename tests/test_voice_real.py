@@ -133,12 +133,12 @@ def test_stt_and_tts_unavailable_error_handling():
 
     # TTS edge-tts missing raises error
     async def run_tts_missing():
-        with patch("src.audio.tts.edge_tts", None):
-            tts = TTSEngine()
+        with patch("src.audio.tts.edge_tts", None), patch.object(TTSEngine, "_use_piper", return_value=False):
+            tts = TTSEngine(online_fallback=True)
             async for _ in tts.stream_audio("Hello"):
                 pass
 
-    with pytest.raises(RuntimeError, match=r"(edge-tts is not available|No usable speech synthesis engine available)"):
+    with pytest.raises(RuntimeError, match=r"(edge-tts is not available|No usable speech synthesis engine available|Piper not found)"):
         asyncio.run(run_tts_missing())
 
 

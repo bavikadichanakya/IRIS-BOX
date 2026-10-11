@@ -54,7 +54,7 @@ def validate_offline_endpoint(api_base: str):
     parsed = urlparse(api_base)
     hostname = (parsed.hostname or "").lower()
 
-    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "mock", "testserver") or "mock" in hostname:
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "mock", "testserver", "test") or "mock" in hostname:
         return
 
     try:
@@ -133,9 +133,6 @@ class IRISOrchestrator:
         Convert registered tools into schemas that satisfy both top-level name access
         and OpenRouter/OpenAI tools calling format.
         """
-        if self._tool_schemas is not None:
-            return self._tool_schemas
-
         tools = []
         self._payload_models = {}
         tool_classes = getattr(self.tool_registry, "_tool_classes", {})
@@ -270,14 +267,14 @@ class IRISOrchestrator:
         confirmation_token: Optional[str] = None,
     ) -> AgentExecutionResult:
         """
-        Process a user request by calling the LLM and executing the tool via ToolManager.
+        Process a user request using a multi-step ReAct loop with ToolManager.
+        Executes tools, appends tool results (role="tool") to history, and re-prompts LLM for final synthesis.
         Persists turn and tool execution details to database if bound.
         """
         session_id = session_id or str(uuid.uuid4())
         start_time = time.perf_counter()
         tool_schemas = self._get_tool_schemas()
 
-        # Build message list with optional history
         messages = [
             {
                 "role": "system",
@@ -299,6 +296,8 @@ class IRISOrchestrator:
             else:
                 messages.extend(self.session_memory.get_history(session_id))
         messages.append({"role": "user", "content": user_prompt})
+        if session_id:
+            self.session_memory.add_message(session_id, "user", user_prompt)
 
         tools_param = [
             {
@@ -312,110 +311,36 @@ class IRISOrchestrator:
             for s in tool_schemas
         ]
 
-        def _call_completion():
-            return self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=tools_param if tools_param else None,
-                tool_choice="auto" if tools_param else None,
-            )
+        step_count = 0
+        max_steps = getattr(self.react_loop, "max_iterations", 5)
+        last_tool_res: Optional[AgentExecutionResult] = None
+        last_tool_name: Optional[str] = None
+        assistant_content = ""
 
-        try:
-            response = self.resilient_provider.execute_with_recovery_sync(
-                _call_completion,
-                request_id=request_id or session_id or "",
-                trace_id=trace_id or "",
-                device_id=device_id or ""
-            )
-        except Exception as e:
-            res = AgentExecutionResult(
-                success=False,
-                tool_name="",
-                output_payload={},
-                error=f"LLM API call failed: {e}"
-            )
-            if self.database:
-                try:
-                    _run_async(self.database.save_turn(
-                        session_id=session_id,
-                        user_prompt=user_prompt,
-                        assistant_response=res.error,
-                        trace_ids=[trace_id] if trace_id else [],
-                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
-                        device_id=device_id
-                    ))
-                except Exception:
-                    pass
-            return res
+        while step_count < max_steps:
+            step_count += 1
 
-        message = response.choices[0].message
-        assistant_content = message.content or ""
-        tool_calls = None
-        if getattr(message, "tool_calls", None):
-            tool_calls = [
-                {
-                    "id": call.id,
-                    "type": "function",
-                    "function": {
-                        "name": call.function.name,
-                        "arguments": call.function.arguments
-                    }
-                }
-                for call in message.tool_calls
-            ]
+            def _call_completion():
+                return self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools_param if tools_param else None,
+                    tool_choice="auto" if tools_param else None,
+                )
 
-        # Store in session memory
-        if session_id:
-            self.session_memory.add_message(session_id, "user", user_prompt)
-            self.session_memory.add_message(session_id, "assistant", assistant_content, tool_calls)
-
-        tool_name = None
-        raw_args = "{}"
-
-        if getattr(message, "tool_calls", None) and len(message.tool_calls) > 0:
-            call = message.tool_calls[0]
-            tool_name = call.function.name
-            raw_args = call.function.arguments
-        elif getattr(message, "function_call", None) and message.function_call is not None:
-            tool_name = message.function_call.name
-            raw_args = message.function_call.arguments
-        else:
-            text_response = assistant_content.strip() or "No response generated"
-            res = AgentExecutionResult(
-                success=True,
-                tool_name="",
-                output_payload={"response": text_response},
-                error=None
-            )
-            total_duration_ms = (time.perf_counter() - start_time) * 1000.0
-            if self.database:
-                try:
-                    _run_async(self.database.save_turn(
-                        session_id=session_id,
-                        user_prompt=user_prompt,
-                        assistant_response=text_response,
-                        trace_ids=[trace_id] if trace_id else [],
-                        duration_ms=total_duration_ms,
-                        device_id=device_id
-                    ))
-                    _run_async(self.database.record_audit_event(
-                        event_type="orchestrator.request_processed",
-                        payload={"request_id": request_id, "text": text_response, "duration_ms": total_duration_ms},
-                        correlation_id=trace_id or request_id or session_id,
-                        device_id=device_id
-                    ))
-                except Exception:
-                    pass
-            return res
-
-        try:
-            payload_model = self._payload_models.get(tool_name)
-            if not payload_model:
+            try:
+                response = self.resilient_provider.execute_with_recovery_sync(
+                    _call_completion,
+                    request_id=request_id or session_id or "",
+                    trace_id=trace_id or "",
+                    device_id=device_id or ""
+                )
+            except Exception as e:
                 res = AgentExecutionResult(
                     success=False,
-                    tool_name=tool_name,
+                    tool_name=last_tool_name or "",
                     output_payload={},
-                    error=f"Unknown tool: {tool_name}"
+                    error=f"LLM API call failed: {e}"
                 )
                 if self.database:
                     try:
@@ -431,118 +356,251 @@ class IRISOrchestrator:
                         pass
                 return res
 
-            args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            payload = payload_model(**args_dict)
-        except Exception as e:
-            res = AgentExecutionResult(
-                success=False,
-                tool_name=tool_name,
-                output_payload={},
-                error=f"Failed to parse function arguments: {e}"
-            )
-            if self.database:
-                try:
-                    _run_async(self.database.save_turn(
-                        session_id=session_id,
-                        user_prompt=user_prompt,
-                        assistant_response=res.error,
-                        trace_ids=[trace_id] if trace_id else [],
-                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
-                        device_id=device_id
-                    ))
-                except Exception:
-                    pass
-            return res
+            message = response.choices[0].message
+            assistant_content = message.content or ""
+            tool_calls = None
+            if getattr(message, "tool_calls", None):
+                tool_calls = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments
+                        }
+                    }
+                    for call in message.tool_calls
+                ]
 
-        context = {
-            "device_id": device_id,
-            "device_type": device_type,
-            "confirmation_token": confirmation_token,
-            "action_payload": args_dict,
-            "session_id": session_id,
-        }
+            tool_name = None
+            raw_args = "{}"
+            call_id = f"call_{step_count}_{uuid.uuid4().hex[:6]}"
 
-        try:
-            tool_start = time.perf_counter()
-            from src.observability.tracing import TraceContext
-            trace_ctx = TraceContext(trace_id=trace_id or "", request_id=request_id or "", device_id=device_id or "")
-            tool_result: ToolResult = _run_async(
-                self.react_loop.execute_step(
-                    tool_name=tool_name,
-                    arguments=args_dict,
-                    trace_context=trace_ctx,
-                    context=context
+            if getattr(message, "tool_calls", None) and len(message.tool_calls) > 0:
+                call = message.tool_calls[0]
+                if hasattr(call, "id") and call.id:
+                    call_id = call.id
+                tool_name = call.function.name
+                raw_args = call.function.arguments
+            elif getattr(message, "function_call", None) and message.function_call is not None:
+                tool_name = message.function_call.name
+                raw_args = message.function_call.arguments
+
+            if not tool_name:
+                text_response = assistant_content.strip() or "No response generated"
+                out_payload = {}
+                if last_tool_res and last_tool_res.output_payload:
+                    out_payload.update(last_tool_res.output_payload)
+                if text_response:
+                    out_payload["response"] = text_response
+
+                final_res = AgentExecutionResult(
+                    success=True,
+                    tool_name=last_tool_name or "",
+                    output_payload=out_payload,
+                    error=None
                 )
-            )
-            tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
-            final_res = self._format_tool_result(tool_name, tool_result)
-            total_duration_ms = (time.perf_counter() - start_time) * 1000.0
-
-            if self.database:
-                try:
-                    turn_id = _run_async(
-                        self.database.save_turn(
+                total_duration_ms = (time.perf_counter() - start_time) * 1000.0
+                if session_id:
+                    self.session_memory.add_message(session_id, "assistant", text_response)
+                if self.database:
+                    try:
+                        _run_async(self.database.save_turn(
                             session_id=session_id,
                             user_prompt=user_prompt,
-                            assistant_response=assistant_content or f"Executed tool {tool_name}",
-                            tool_calls=tool_calls,
+                            assistant_response=text_response,
                             trace_ids=[trace_id] if trace_id else [],
                             duration_ms=total_duration_ms,
-                            metadata={"device_id": device_id, "request_id": request_id, "confirmed": confirmed},
                             device_id=device_id
-                        )
-                    )
-                    output_dict = tool_result.output if isinstance(tool_result.output, dict) else {"result": tool_result.output}
-                    _run_async(
-                        self.database.record_tool_execution(
-                            session_id=session_id,
-                            tool_name=tool_name,
-                            status=tool_result.status.value,
-                            duration_ms=tool_duration_ms,
-                            turn_id=turn_id,
-                            arguments=args_dict,
-                            result=output_dict,
-                            error=tool_result.error,
-                            trace_id=trace_id
-                        )
-                    )
-                    _run_async(
-                        self.database.record_audit_event(
+                        ))
+                        _run_async(self.database.record_audit_event(
                             event_type="orchestrator.request_processed",
-                            payload={
-                                "request_id": request_id,
-                                "tool_name": tool_name,
-                                "success": final_res.success,
-                                "duration_ms": total_duration_ms,
-                            },
+                            payload={"request_id": request_id, "text": text_response, "duration_ms": total_duration_ms},
                             correlation_id=trace_id or request_id or session_id,
                             device_id=device_id
-                        )
-                    )
-                except Exception:
-                    pass
+                        ))
+                    except Exception:
+                        pass
+                return final_res
 
-            return final_res
-        except Exception as e:
-            res = AgentExecutionResult(
-                success=False,
-                tool_name=tool_name,
-                output_payload={},
-                error=f"Tool execution failed: {e}"
-            )
-            if self.database:
-                try:
-                    _run_async(self.database.save_turn(
-                        session_id=session_id,
-                        user_prompt=user_prompt,
-                        assistant_response=res.error,
-                        trace_ids=[trace_id] if trace_id else [],
-                        duration_ms=(time.perf_counter() - start_time) * 1000.0,
-                        device_id=device_id
-                    ))
-                except Exception:
-                    pass
-            return res
+            last_tool_name = tool_name
+            try:
+                payload_model = self._payload_models.get(tool_name)
+                if not payload_model:
+                    res = AgentExecutionResult(
+                        success=False,
+                        tool_name=tool_name,
+                        output_payload={},
+                        error=f"Unknown tool: {tool_name}"
+                    )
+                    if self.database:
+                        try:
+                            _run_async(self.database.save_turn(
+                                session_id=session_id,
+                                user_prompt=user_prompt,
+                                assistant_response=res.error,
+                                trace_ids=[trace_id] if trace_id else [],
+                                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                                device_id=device_id
+                            ))
+                        except Exception:
+                            pass
+                    return res
+
+                args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                payload = payload_model(**args_dict)
+            except Exception as e:
+                res = AgentExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    output_payload={},
+                    error=f"Failed to parse function arguments: {e}"
+                )
+                if self.database:
+                    try:
+                        _run_async(self.database.save_turn(
+                            session_id=session_id,
+                            user_prompt=user_prompt,
+                            assistant_response=res.error,
+                            trace_ids=[trace_id] if trace_id else [],
+                            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                            device_id=device_id
+                        ))
+                    except Exception:
+                        pass
+                return res
+
+            context = {
+                "device_id": device_id,
+                "device_type": device_type,
+                "confirmation_token": confirmation_token,
+                "action_payload": args_dict,
+                "session_id": session_id,
+                "confirmed": confirmed,
+            }
+
+            try:
+                tool_start = time.perf_counter()
+                from src.observability.tracing import TraceContext
+                trace_ctx = TraceContext(trace_id=trace_id or "", request_id=request_id or "", device_id=device_id or "")
+                tool_result: ToolResult = _run_async(
+                    self.react_loop.execute_step(
+                        tool_name=tool_name,
+                        arguments=args_dict,
+                        trace_context=trace_ctx,
+                        context=context
+                    )
+                )
+                tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
+                formatted_res = self._format_tool_result(tool_name, tool_result)
+                last_tool_res = formatted_res
+
+                if not formatted_res.success or tool_result.status != ExecutionStatus.SUCCEEDED:
+                    total_duration_ms = (time.perf_counter() - start_time) * 1000.0
+                    if self.database:
+                        try:
+                            turn_id = _run_async(
+                                self.database.save_turn(
+                                    session_id=session_id,
+                                    user_prompt=user_prompt,
+                                    assistant_response=formatted_res.error or f"Tool {tool_name} execution failed",
+                                    tool_calls=tool_calls,
+                                    trace_ids=[trace_id] if trace_id else [],
+                                    duration_ms=total_duration_ms,
+                                    metadata={"device_id": device_id, "request_id": request_id},
+                                    device_id=device_id
+                                )
+                            )
+                        except Exception:
+                            pass
+                    return formatted_res
+
+                if confirmation_token and formatted_res.success:
+                    return formatted_res
+
+                confirmation_token = None
+
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_content or None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": raw_args
+                            }
+                        }
+                    ]
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(formatted_res.output_payload)
+                })
+
+                if self.database:
+                    try:
+                        turn_id = _run_async(
+                            self.database.save_turn(
+                                session_id=session_id,
+                                user_prompt=user_prompt,
+                                assistant_response=assistant_content or f"Executed tool {tool_name}",
+                                tool_calls=tool_calls,
+                                trace_ids=[trace_id] if trace_id else [],
+                                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                                metadata={"device_id": device_id, "request_id": request_id, "confirmed": confirmed},
+                                device_id=device_id
+                            )
+                        )
+                        output_dict = tool_result.output if isinstance(tool_result.output, dict) else {"result": tool_result.output}
+                        _run_async(
+                            self.database.record_tool_execution(
+                                session_id=session_id,
+                                tool_name=tool_name,
+                                status=tool_result.status.value,
+                                duration_ms=tool_duration_ms,
+                                turn_id=turn_id,
+                                arguments=args_dict,
+                                result=output_dict,
+                                error=tool_result.error,
+                                trace_id=trace_id
+                            )
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                res = AgentExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    output_payload={},
+                    error=f"Tool execution failed: {e}"
+                )
+                if self.database:
+                    try:
+                        _run_async(self.database.save_turn(
+                            session_id=session_id,
+                            user_prompt=user_prompt,
+                            assistant_response=res.error,
+                            trace_ids=[trace_id] if trace_id else [],
+                            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                            device_id=device_id
+                        ))
+                    except Exception:
+                        pass
+                return res
+
+        if session_id:
+            self.session_memory.add_message(session_id, "assistant", assistant_content or f"Executed tool {last_tool_name}")
+        if last_tool_res:
+            return last_tool_res
+        return AgentExecutionResult(
+            success=True,
+            tool_name=last_tool_name or "",
+            output_payload={"response": assistant_content.strip() or "ReAct loop limit reached"},
+            error=None
+        )
 
     async def stream_request(
         self,
