@@ -235,7 +235,7 @@ if os.path.exists(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 # Mobile Companion PWA Shell Route
-@app.get("/mobile", response_class=FileResponse)
+@app.api_route("/mobile", methods=["GET", "HEAD"], response_class=FileResponse)
 async def get_mobile_companion():
     """Serve the local air-gapped PWA mobile companion shell."""
     mobile_html = os.path.join(os.path.dirname(__file__), "static", "mobile", "index.html")
