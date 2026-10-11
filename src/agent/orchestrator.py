@@ -22,6 +22,7 @@ from src.storage.memory_store import MemoryStore
 from src.agent.recovery import ResilientLLMProvider, CircuitState, ProviderUnavailableError
 from src.agent.react_loop import ReActLoop
 from src.agent.plan_manager import PlanManager, ExecutionPlan, PlanStep, PlanStatus, StepStatus
+from src.skills.registry import SkillRegistry
 
 
 def _run_async(coro):
@@ -113,6 +114,7 @@ class IRISOrchestrator:
         max_steps: int = 5,
         memory_store: Optional[MemoryStore] = None,
         plan_manager: Optional[PlanManager] = None,
+        skill_registry: Optional[SkillRegistry] = None,
     ):
         validate_offline_endpoint(api_base)
         self.api_base = api_base
@@ -121,10 +123,15 @@ class IRISOrchestrator:
         self.model = model
         self.tool_registry = tool_registry or ToolRegistry
         self.event_bus = event_bus or EventBus()
+        self.skill_registry = skill_registry or SkillRegistry(event_bus=self.event_bus)
         self.tool_manager = tool_manager or ToolManager(
             registry=self.tool_registry,
-            event_bus=self.event_bus
+            event_bus=self.event_bus,
+            skill_registry=self.skill_registry,
         )
+        if hasattr(self.tool_manager, "skill_registry") and not self.tool_manager.skill_registry:
+            self.tool_manager.skill_registry = self.skill_registry
+            self.skill_registry.bridge_to_tool_manager(self.tool_manager)
         self.database = database
         self.memory_store = memory_store or (MemoryStore(db=self.database) if self.database else None)
         self.plan_manager = plan_manager or PlanManager()

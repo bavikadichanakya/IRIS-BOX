@@ -21,14 +21,18 @@ class ToolManager:
         self,
         registry: Optional[Union[ToolRegistry, Type[ToolRegistry]]] = None,
         permission_manager: Optional[PermissionManager] = None,
-        event_bus: Optional[EventBus] = None
+        event_bus: Optional[EventBus] = None,
+        skill_registry: Optional[Any] = None,
     ):
         reg = registry or ToolRegistry
         self.registry = reg() if inspect.isclass(reg) else reg
         self.permission_manager = permission_manager or PermissionManager()
         self.event_bus = event_bus or EventBus()
+        self.skill_registry = skill_registry
         self._capabilities: Dict[str, Capability] = {}
         self._initialize_capabilities()
+        if self.skill_registry and hasattr(self.skill_registry, "bridge_to_tool_manager"):
+            self.skill_registry.bridge_to_tool_manager(self)
 
     def _initialize_capabilities(self):
         """Map registered tool schemas into rich Capabilities with default safety tiers."""
@@ -64,7 +68,19 @@ class ToolManager:
         return self._capabilities.get(name)
 
     def get_schemas(self):
-        return self.registry.get_schemas()
+        schemas = list(self.registry.get_schemas())
+        existing = {s["name"] for s in schemas}
+        if hasattr(self, "skill_registry") and self.skill_registry:
+            for m in self.skill_registry.list_skills():
+                if m.name not in existing:
+                    schemas.append({
+                        "name": m.name,
+                        "description": m.description,
+                        "parameters": m.parameters_schema,
+                        "category": m.category
+                    })
+                    existing.add(m.name)
+        return schemas
 
     async def execute_tool(
         self,
@@ -138,10 +154,21 @@ class ToolManager:
 
         # 2. Execution with Timeout Boundary
         try:
-            output = await asyncio.wait_for(
-                self.registry.execute(name, arguments),
-                timeout=capability.execution_timeout_sec
-            )
+            if hasattr(self, "skill_registry") and self.skill_registry and self.skill_registry.get_skill(name):
+                skill_res = await self.skill_registry.execute_skill(
+                    name=name,
+                    params=arguments,
+                    context=ctx_data,
+                    trace_context=trace_ctx
+                )
+                if not skill_res.success:
+                    raise RuntimeError(skill_res.error or f"Skill '{name}' failed.")
+                output = skill_res.output
+            else:
+                output = await asyncio.wait_for(
+                    self.registry.execute(name, arguments),
+                    timeout=capability.execution_timeout_sec
+                )
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             await self.event_bus.publish("tool.execution.succeeded", {"tool": name, "duration_ms": duration_ms}, trace=trace_ctx)
             await self.event_bus.publish("tool.completed", {
