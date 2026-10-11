@@ -124,6 +124,25 @@ async def get_dashboard_status(request: Request):
         },
     }
 
+    # Proactive Ambient Engine status card
+    proactive_eng = getattr(request.app.state, "proactive_engine", None)
+    ha_cli = getattr(request.app.state, "ha_client", None)
+    ha_status = getattr(ha_cli, "status", "DISABLED") if ha_cli else "DISABLED"
+    rules_count = len(proactive_eng.get_rules()) if proactive_eng else 0
+    recent_ann = proactive_eng.recent_announcements if proactive_eng else []
+
+    subsystems["proactive_engine"] = {
+        "name": "Ambient Proactive Engine",
+        "component": "HomeAssistantWS",
+        "status": "HEALTHY" if ha_status == "CONNECTED" else ("UNAVAILABLE" if ha_status == "DISABLED" else "DEGRADED"),
+        "connection_status": ha_status,
+        "active_rules_count": rules_count,
+        "recent_announcements": recent_ann[-10:],
+        "latency_ms": 1.0,
+        "message": f"{ha_status} ({rules_count} rules active)",
+    }
+
+
     # 2. Derive Operational Metrics
     snapshot = runtime_metrics.get_metrics_snapshot()
     reqs = snapshot.get("requests", {})

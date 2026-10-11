@@ -28,7 +28,10 @@ from src.server.routers.memory import router as memory_router
 from src.server.routers.plans import router as plans_router
 from src.server.routers.skills import router as skills_router
 from src.server.routers.dashboard import router as dashboard_router
+from src.server.routers.automation import router as automation_router
+from src.automation import HomeAssistantWSClient, ProactiveSpeechDispatcher, ProactiveEngine
 from starlette.staticfiles import StaticFiles
+
 from src.skills.registry import SkillRegistry
 from src.agent.plan_manager import PlanManager
 from src.storage.memory_store import MemoryStore
@@ -101,6 +104,13 @@ async def lifespan(app: FastAPI):
         except Exception:
             vector_store = None
 
+    # Proactive Ambient Smart Home Engine
+    proactive_disp = ProactiveSpeechDispatcher(tts_engine=tts_eng, connection_manager=ws_manager)
+    proactive_eng = ProactiveEngine(event_bus=orchestrator.event_bus, dispatcher=proactive_disp, database=db)
+    proactive_eng.start()
+    ha_client = HomeAssistantWSClient(event_bus=orchestrator.event_bus)
+    await ha_client.start()
+
     app.state.db = db
     app.state.memory_store = memory_store
     app.state.vector_store = vector_store
@@ -111,6 +121,9 @@ async def lifespan(app: FastAPI):
     app.state.fleet_manager = fleet_mgr
     app.state.ws_manager = ws_manager
     app.state.voice_pipeline = voice_pipe
+    app.state.ha_client = ha_client
+    app.state.proactive_dispatcher = proactive_disp
+    app.state.proactive_engine = proactive_eng
 
     health_supervisor.db_connection = db
     health_supervisor.orchestrator = orchestrator
@@ -120,6 +133,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup
+    await ha_client.stop()
     await db.close()
     health_supervisor.db_connection = None
     health_supervisor.ws_manager = None
@@ -141,6 +155,12 @@ async def lifespan(app: FastAPI):
         del app.state.ws_manager
     if hasattr(app.state, "voice_pipeline"):
         del app.state.voice_pipeline
+    if hasattr(app.state, "ha_client"):
+        del app.state.ha_client
+    if hasattr(app.state, "proactive_dispatcher"):
+        del app.state.proactive_dispatcher
+    if hasattr(app.state, "proactive_engine"):
+        del app.state.proactive_engine
 
 
 app = FastAPI(lifespan=lifespan)
@@ -175,6 +195,10 @@ app.include_router(plans_router, prefix="/api", dependencies=[Depends(verify_api
 # Protected Skills & Plugins API endpoints requiring authentication
 app.include_router(skills_router, dependencies=[Depends(verify_api_key)])
 app.include_router(skills_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
+# Protected Ambient Automation API endpoints requiring authentication
+app.include_router(automation_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
 
 # Static Assets Mount
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
