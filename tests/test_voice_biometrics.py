@@ -371,3 +371,28 @@ def test_biometrics_api_crud_and_identification(test_client, auth_headers):
     list_res_after = test_client.get("/api/biometrics/speakers", headers=auth_headers)
     sarah_after = next((s for s in list_res_after.json() if s["speaker_id"] == "spk_sarah"), None)
     assert sarah_after is None
+
+
+def test_biometrics_api_enroll_with_audio_samples_alias(test_client, auth_headers):
+    """Verify enrollment succeeds when payload uses 'audio_samples' instead of 'samples'."""
+    pcm = _generate_pcm(160, [750, 1300, 2600])
+    b64_audio = base64.b64encode(pcm).decode("utf-8")
+
+    payload = {
+        "name": "Primary Admin",
+        "role": "ADMIN",
+        "audio_samples": [b64_audio],
+        "speaker_id": "spk_primary_admin"
+    }
+    res = test_client.post("/api/biometrics/enroll", json=payload, headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["speaker_id"] == "spk_primary_admin"
+    assert data["name"] == "Primary Admin"
+    assert data["role"] == "ADMIN"
+
+    # Cleanup
+    del_res = test_client.delete("/api/biometrics/speakers/spk_primary_admin", headers=auth_headers)
+    assert del_res.status_code == 200
+

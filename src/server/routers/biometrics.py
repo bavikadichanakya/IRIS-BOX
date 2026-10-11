@@ -26,7 +26,8 @@ def get_speaker_registry(request: Request) -> SpeakerRegistry:
 class EnrollSpeakerPayload(BaseModel):
     name: str = Field(..., min_length=1, description="Speaker name")
     role: Role = Field(Role.MEMBER, description="Assigned role: ADMIN, MEMBER, GUEST, RESTRICTED")
-    samples: List[str] = Field(..., min_length=1, description="List of base64-encoded PCM or WAV audio samples")
+    samples: Optional[List[str]] = Field(None, description="List of base64-encoded PCM or WAV audio samples")
+    audio_samples: Optional[List[str]] = Field(None, description="Alias for samples")
     speaker_id: Optional[str] = Field(None, description="Optional custom speaker_id")
 
 
@@ -65,8 +66,15 @@ async def enroll_speaker(request: Request, payload: EnrollSpeakerPayload):
     Enroll a new speaker profile with multiple audio samples.
     """
     registry = get_speaker_registry(request)
+    input_samples = payload.samples or payload.audio_samples or []
+    if not input_samples:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one audio sample ('samples' or 'audio_samples') is required for enrollment."
+        )
+
     raw_samples: List[bytes] = []
-    for idx, s in enumerate(payload.samples):
+    for idx, s in enumerate(input_samples):
         try:
             raw_samples.append(base64.b64decode(s))
         except Exception as e:
