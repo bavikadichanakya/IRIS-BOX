@@ -24,6 +24,8 @@ from src.models.schemas import VoiceCommandPayload, AgentExecutionResult
 from src.agent.orchestrator import IRISOrchestrator
 from src.audio.tts import TTSEngine
 from src.server.fleet import FleetManager, router as fleet_router
+from src.server.routers.memory import router as memory_router
+from src.storage.memory_store import MemoryStore
 from src.health.health_checker import (
     health_checker,
     HealthStatus,
@@ -75,11 +77,13 @@ async def lifespan(app: FastAPI):
     model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", "qwen2.5:7b-instruct")
 
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
+    memory_store = getattr(orchestrator, "memory_store", None) or MemoryStore(db=db)
     fleet_mgr = FleetManager(ws_manager=ws_manager, event_bus=orchestrator.event_bus)
     tts_eng = TTSEngine(online_fallback=False)
     voice_pipe = VoicePipeline(orchestrator=orchestrator, tts=tts_eng)
 
     app.state.db = db
+    app.state.memory_store = memory_store
     app.state.orchestrator = orchestrator
     app.state.tts_engine = tts_eng
     app.state.fleet_manager = fleet_mgr
@@ -99,6 +103,8 @@ async def lifespan(app: FastAPI):
     health_supervisor.ws_manager = None
     if hasattr(app.state, "orchestrator"):
         del app.state.orchestrator
+    if hasattr(app.state, "memory_store"):
+        del app.state.memory_store
     if hasattr(app.state, "fleet_manager"):
         del app.state.fleet_manager
     if hasattr(app.state, "db"):
@@ -131,12 +137,16 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(fleet_router, dependencies=[Depends(verify_api_key)])
 app.include_router(fleet_router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
+# Protected Personal Memory & Preferences API endpoints requiring authentication
+app.include_router(memory_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
 class ProcessRequestPayload(BaseModel):
     prompt: str
     session_id: Optional[str] = "default-session"
     device_id: Optional[str] = "unknown"
     confirmation_token: Optional[str] = None
     confirmed: Optional[bool] = False
+    user_id: Optional[str] = "default"
 
 class ConfirmRequestPayload(BaseModel):
     confirmation_token: str
@@ -155,7 +165,8 @@ async def process_orchestrator_request(payload: ProcessRequestPayload, request: 
         session_id=payload.session_id or "default-session",
         device_id=payload.device_id or "unknown",
         confirmed=bool(payload.confirmed),
-        confirmation_token=payload.confirmation_token
+        confirmation_token=payload.confirmation_token,
+        user_id=payload.user_id or "default"
     )
     if hasattr(result, "model_dump"):
         return result.model_dump()

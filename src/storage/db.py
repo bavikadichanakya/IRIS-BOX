@@ -119,6 +119,26 @@ class Database:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id TEXT NOT NULL DEFAULT 'default',
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'general',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, key)
+            );
+
+            CREATE TABLE IF NOT EXISTS inferred_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                fact TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                source_session_id TEXT,
+                confirmed_by_user BOOLEAN DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_device ON sessions(device_id);
             CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, turn_index);
             CREATE INDEX IF NOT EXISTS idx_tool_exec_session ON tool_executions(session_id);
@@ -127,6 +147,8 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id);
             CREATE INDEX IF NOT EXISTS idx_latency_session ON latency_metrics(session_id);
             CREATE INDEX IF NOT EXISTS idx_errors_session ON errors(session_id);
+            CREATE INDEX IF NOT EXISTS idx_user_preferences_user ON user_preferences(user_id);
+            CREATE INDEX IF NOT EXISTS idx_inferred_facts_user ON inferred_facts(user_id, confidence);
         """)
         await self._conn.commit()
 
