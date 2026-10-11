@@ -287,6 +287,26 @@ class BrowserTool(BaseTool):
                     error=f"SSRF_BLOCKED: {reason}"
                 )
 
+        act = action_payload.action
+        if act in ("goto", "navigate", "open"):
+            if not action_payload.url:
+                return AgentExecutionResult(success=False, tool_name="BrowserTool", error="URL is required for navigate action")
+            try:
+                import webbrowser
+                opened = webbrowser.open(action_payload.url)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="BrowserTool",
+                    output_payload={
+                        "action_performed": act,
+                        "url": action_payload.url,
+                        "opened_on_desktop": opened,
+                        "message": f"Successfully opened {action_payload.url} in browser on laptop."
+                    }
+                )
+            except Exception as e:
+                pass
+
         try:
             return asyncio.run(self.execute_async(action_payload))
         except Exception:
@@ -309,6 +329,28 @@ class BrowserTool(BaseTool):
                     output_payload={},
                     error=f"SSRF_BLOCKED: {reason}"
                 )
+
+        act = action_payload.action
+
+        # If action is simply opening/navigating to a URL on the user's laptop, launch desktop browser
+        if act in ("goto", "navigate", "open"):
+            if not action_payload.url:
+                return AgentExecutionResult(success=False, tool_name="BrowserTool", error="URL is required for navigate action")
+            try:
+                import webbrowser
+                opened = webbrowser.open(action_payload.url)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="BrowserTool",
+                    output_payload={
+                        "action_performed": act,
+                        "url": action_payload.url,
+                        "opened_on_desktop": opened,
+                        "message": f"Successfully opened {action_payload.url} in browser on laptop."
+                    }
+                )
+            except Exception as e:
+                pass
 
         try:
             from playwright.async_api import async_playwright
