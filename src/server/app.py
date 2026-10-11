@@ -25,6 +25,8 @@ from src.agent.orchestrator import IRISOrchestrator
 from src.audio.tts import TTSEngine
 from src.server.fleet import FleetManager, router as fleet_router
 from src.server.routers.memory import router as memory_router
+from src.server.routers.plans import router as plans_router
+from src.agent.plan_manager import PlanManager
 from src.storage.memory_store import MemoryStore
 from src.health.health_checker import (
     health_checker,
@@ -78,12 +80,14 @@ async def lifespan(app: FastAPI):
 
     orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
     memory_store = getattr(orchestrator, "memory_store", None) or MemoryStore(db=db)
+    plan_manager = getattr(orchestrator, "plan_manager", None) or PlanManager()
     fleet_mgr = FleetManager(ws_manager=ws_manager, event_bus=orchestrator.event_bus)
     tts_eng = TTSEngine(online_fallback=False)
     voice_pipe = VoicePipeline(orchestrator=orchestrator, tts=tts_eng)
 
     app.state.db = db
     app.state.memory_store = memory_store
+    app.state.plan_manager = plan_manager
     app.state.orchestrator = orchestrator
     app.state.tts_engine = tts_eng
     app.state.fleet_manager = fleet_mgr
@@ -105,6 +109,8 @@ async def lifespan(app: FastAPI):
         del app.state.orchestrator
     if hasattr(app.state, "memory_store"):
         del app.state.memory_store
+    if hasattr(app.state, "plan_manager"):
+        del app.state.plan_manager
     if hasattr(app.state, "fleet_manager"):
         del app.state.fleet_manager
     if hasattr(app.state, "db"):
@@ -139,6 +145,10 @@ app.include_router(fleet_router, prefix="/api", dependencies=[Depends(verify_api
 
 # Protected Personal Memory & Preferences API endpoints requiring authentication
 app.include_router(memory_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
+# Protected Execution Plans API endpoints requiring authentication
+app.include_router(plans_router, dependencies=[Depends(verify_api_key)])
+app.include_router(plans_router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
 class ProcessRequestPayload(BaseModel):
     prompt: str

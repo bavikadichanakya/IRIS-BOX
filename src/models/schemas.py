@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, Optional, Any
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,17 @@ class AgentExecutionResult(BaseModel):
     error: Optional[str] = None
     confirmation_token: Optional[str] = None
     pending_action: Optional[Dict] = None
+    status: Optional[str] = None
+    plan_id: Optional[str] = None
+
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            val = getattr(self, item)
+            if val is not None:
+                return val
+        if isinstance(self.output_payload, dict) and item in self.output_payload:
+            return self.output_payload[item]
+        raise KeyError(item)
 
 
 class StreamChunkPayload(BaseModel):

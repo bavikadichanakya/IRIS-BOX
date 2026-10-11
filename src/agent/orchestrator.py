@@ -5,7 +5,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Dict, List, Optional, Type, Union
+from typing import Dict, List, Optional, Type, Union, Any, Tuple
 
 logger = logging.getLogger("iris.orchestrator")
 
@@ -15,12 +15,13 @@ from pydantic import BaseModel
 from src.models.schemas import AgentExecutionResult, StreamChunkPayload
 from src.tools.registry import BaseTool, ToolRegistry
 from src.tools.manager import ToolManager
-from src.tools.capability import ToolResult, ExecutionStatus
+from src.tools.capability import ToolResult, ExecutionStatus, PermissionLevel
 from src.observability.event_bus import EventBus
 from src.storage.db import Database
 from src.storage.memory_store import MemoryStore
 from src.agent.recovery import ResilientLLMProvider, CircuitState, ProviderUnavailableError
 from src.agent.react_loop import ReActLoop
+from src.agent.plan_manager import PlanManager, ExecutionPlan, PlanStep, PlanStatus, StepStatus
 
 
 def _run_async(coro):
@@ -111,6 +112,7 @@ class IRISOrchestrator:
         resilient_provider: Optional[ResilientLLMProvider] = None,
         max_steps: int = 5,
         memory_store: Optional[MemoryStore] = None,
+        plan_manager: Optional[PlanManager] = None,
     ):
         validate_offline_endpoint(api_base)
         self.api_base = api_base
@@ -125,6 +127,7 @@ class IRISOrchestrator:
         )
         self.database = database
         self.memory_store = memory_store or (MemoryStore(db=self.database) if self.database else None)
+        self.plan_manager = plan_manager or PlanManager()
         self.resilient_provider = resilient_provider or ResilientLLMProvider(event_bus=self.event_bus)
         self.react_loop = ReActLoop(tool_manager=self.tool_manager, max_iterations=max_steps)
         self._tool_schemas: Optional[List[Dict]] = None
@@ -156,6 +159,205 @@ class IRISOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to retrieve personal memory context for user '{user_id}': {e}")
             return None
+
+    def _should_stage_plan(self, user_prompt: str) -> bool:
+        low = user_prompt.lower()
+        triggers = [
+            "execution plan",
+            "create a plan",
+            "create plan",
+            "stage a plan",
+            "stage plan",
+            "plan preview",
+            "preview plan",
+            "multi-step plan",
+            "step-by-step plan",
+            "generate a plan",
+            "generate plan",
+            "plan:",
+        ]
+        if any(t in low for t in triggers):
+            return True
+        if low.startswith("plan to ") or low.startswith("plan :"):
+            return True
+        return False
+
+    def _build_plan_from_calls_or_prompt(
+        self,
+        user_prompt: str,
+        tool_calls: Optional[List[Any]] = None
+    ) -> Tuple[str, List[PlanStep]]:
+        steps: List[PlanStep] = []
+        if tool_calls and len(tool_calls) > 0:
+            for idx, call in enumerate(tool_calls):
+                call_fn = getattr(call, "function", None)
+                if call_fn:
+                    name = getattr(call_fn, "name", "")
+                    raw_args = getattr(call_fn, "arguments", "{}")
+                elif isinstance(call, dict) and "function" in call:
+                    name = call["function"].get("name", "")
+                    raw_args = call["function"].get("arguments", "{}")
+                else:
+                    name = "SystemCommandTool"
+                    raw_args = "{}"
+
+                args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                cap = self.tool_manager.get_capability(name)
+                perm = cap.permission_level if cap else PermissionLevel.PUBLIC
+                desc = cap.description if cap else f"Execute {name}"
+
+                steps.append(
+                    PlanStep(
+                        step_id=idx + 1,
+                        tool_name=name,
+                        action_type="execution",
+                        parameters=args_dict,
+                        description=desc,
+                        permission_level=perm,
+                        status=StepStatus.PENDING,
+                    )
+                )
+            summary = f"Multi-step execution plan for: {user_prompt}"
+            return summary, steps
+
+        import re
+        clean_prompt = user_prompt
+        for prefix in [
+            "create an execution plan to",
+            "create an execution plan for",
+            "create a plan to",
+            "create a plan for",
+            "create plan to",
+            "stage an execution plan to",
+            "stage a plan to",
+            "stage plan to",
+            "execution plan to",
+            "execution plan for",
+            "plan to",
+        ]:
+            if clean_prompt.lower().startswith(prefix):
+                clean_prompt = clean_prompt[len(prefix):].strip()
+                break
+
+        parts = [p.strip() for p in re.split(r'\s+(?:and\s+then|then|and|after\s+that)\s+|;\s*|\n+|\d+\.\s*', clean_prompt) if p.strip()]
+        if not parts:
+            parts = [clean_prompt] if clean_prompt else ["execute requested tasks"]
+
+        for idx, part in enumerate(parts):
+            p_low = part.lower()
+            if any(k in p_low for k in ["light", "switch", "lamp", "turn on", "turn off", "home", "door", "lock"]):
+                action = "off" if "off" in p_low else "on"
+                entity = "light.living_room"
+                for word in part.split():
+                    if "." in word:
+                        entity = word
+                steps.append(
+                    PlanStep(
+                        step_id=idx + 1,
+                        tool_name="HomeAssistantTool",
+                        action_type="smart_home",
+                        parameters={"domain": "light", "action": action, "entity_id": entity},
+                        description=f"Smart home action: {part}",
+                        permission_level=PermissionLevel.PROTECTED,
+                        status=StepStatus.PENDING,
+                    )
+                )
+            elif any(k in p_low for k in ["echo", "dir", "ls", "pwd", "whoami", "ping", "reboot", "command", "terminal", "shell", "run", "sleep"]):
+                cmd = part
+                for prefix in ["run", "execute", "terminal", "command"]:
+                    if cmd.lower().startswith(prefix):
+                        cmd = cmd[len(prefix):].strip()
+                steps.append(
+                    PlanStep(
+                        step_id=idx + 1,
+                        tool_name="SystemCommandTool",
+                        action_type="terminal",
+                        parameters={"command": cmd, "action_type": "terminal"},
+                        description=f"Execute system command: {cmd}",
+                        permission_level=PermissionLevel.SENSITIVE,
+                        status=StepStatus.PENDING,
+                    )
+                )
+            else:
+                steps.append(
+                    PlanStep(
+                        step_id=idx + 1,
+                        tool_name="SystemCommandTool",
+                        action_type="terminal",
+                        parameters={"command": f"echo {part}", "action_type": "terminal"},
+                        description=f"Execute step: {part}",
+                        permission_level=PermissionLevel.PUBLIC,
+                        status=StepStatus.PENDING,
+                    )
+                )
+
+        summary = f"Execution plan for: {user_prompt}"
+        return summary, steps
+
+    def create_plan(
+        self,
+        summary: str,
+        steps: List[Union[PlanStep, Dict[str, Any]]],
+        session_id: str = "default-session",
+        device_id: str = "unknown",
+        ttl_sec: Optional[float] = None
+    ) -> ExecutionPlan:
+        return self.plan_manager.create_plan(
+            session_id=session_id,
+            device_id=device_id,
+            summary=summary,
+            steps=steps,
+            ttl_sec=ttl_sec
+        )
+
+    async def execute_plan(self, plan_id: str) -> AgentExecutionResult:
+        """
+        Execute an approved plan via PlanManager and feed step outputs back into final response generation.
+        """
+        plan = await self.plan_manager.execute_approved_plan(plan_id, self)
+
+        if plan.status == PlanStatus.COMPLETED:
+            summary_lines = [f"Successfully executed plan '{plan.summary}':"]
+            step_outputs = {}
+            for step in plan.steps:
+                out = step.result.get("output") if step.result else None
+                step_outputs[f"step_{step.step_id}_{step.tool_name}"] = out
+                summary_lines.append(f"- Step {step.step_id} ({step.tool_name}): {out if out is not None else 'Completed'}")
+
+            response_text = "\n".join(summary_lines)
+            if plan.session_id:
+                self.session_memory.add_message(plan.session_id, "assistant", response_text)
+
+            return AgentExecutionResult(
+                success=True,
+                tool_name="PlanManager",
+                status="COMPLETED",
+                plan_id=plan.plan_id,
+                output_payload={
+                    "status": "COMPLETED",
+                    "plan_id": plan.plan_id,
+                    "summary": plan.summary,
+                    "response": response_text,
+                    "steps": [s.model_dump() for s in plan.steps],
+                    "step_outputs": step_outputs,
+                }
+            )
+        else:
+            failed_step = next((s for s in plan.steps if s.status == StepStatus.FAILED), None)
+            err_msg = failed_step.error if failed_step else f"Plan execution halted with status {plan.status.value}"
+            return AgentExecutionResult(
+                success=False,
+                tool_name="PlanManager",
+                status=plan.status.value,
+                plan_id=plan.plan_id,
+                output_payload={
+                    "status": plan.status.value,
+                    "plan_id": plan.plan_id,
+                    "summary": plan.summary,
+                    "steps": [s.model_dump() for s in plan.steps],
+                },
+                error=err_msg
+            )
 
     def _get_tool_schemas(self) -> List[Dict]:
         """
@@ -303,6 +505,32 @@ class IRISOrchestrator:
         """
         session_id = session_id or str(uuid.uuid4())
         start_time = time.perf_counter()
+
+        # Explicit plan request detection: Stage plan preview immediately without unguided tool execution
+        if self._should_stage_plan(user_prompt):
+            summary, steps = self._build_plan_from_calls_or_prompt(user_prompt, [])
+            plan = self.plan_manager.create_plan(
+                session_id=session_id,
+                device_id=device_id,
+                summary=summary,
+                steps=steps,
+            )
+            res_payload = {
+                "status": "PLAN_PREVIEW_REQUIRED",
+                "plan_id": plan.plan_id,
+                "summary": plan.summary,
+                "steps": [s.model_dump() for s in plan.steps],
+            }
+            return AgentExecutionResult(
+                success=True,
+                tool_name="PlanManager",
+                status="PLAN_PREVIEW_REQUIRED",
+                plan_id=plan.plan_id,
+                output_payload=res_payload,
+                pending_action={"plan_id": plan.plan_id},
+                error=None
+            )
+
         tool_schemas = self._get_tool_schemas()
 
         system_content = (
@@ -379,6 +607,29 @@ class IRISOrchestrator:
                     device_id=device_id or ""
                 )
             except Exception as e:
+                if self._should_stage_plan(user_prompt):
+                    summary, steps = self._build_plan_from_calls_or_prompt(user_prompt, [])
+                    plan = self.plan_manager.create_plan(
+                        session_id=session_id,
+                        device_id=device_id,
+                        summary=summary,
+                        steps=steps,
+                    )
+                    res_payload = {
+                        "status": "PLAN_PREVIEW_REQUIRED",
+                        "plan_id": plan.plan_id,
+                        "summary": plan.summary,
+                        "steps": [s.model_dump() for s in plan.steps],
+                    }
+                    return AgentExecutionResult(
+                        success=True,
+                        tool_name="PlanManager",
+                        status="PLAN_PREVIEW_REQUIRED",
+                        plan_id=plan.plan_id,
+                        output_payload=res_payload,
+                        pending_action={"plan_id": plan.plan_id},
+                        error=None
+                    )
                 res = AgentExecutionResult(
                     success=False,
                     tool_name=last_tool_name or "",
@@ -401,6 +652,42 @@ class IRISOrchestrator:
 
             message = response.choices[0].message
             assistant_content = message.content or ""
+
+            all_calls = getattr(message, "tool_calls", None) or []
+            is_explicit_plan = self._should_stage_plan(user_prompt)
+            has_multi_sensitive = False
+            if len(all_calls) > 1:
+                for c in all_calls:
+                    c_name = getattr(c.function, "name", "")
+                    cap = self.tool_manager.get_capability(c_name)
+                    if cap and cap.permission_level in (PermissionLevel.PROTECTED, PermissionLevel.SENSITIVE):
+                        has_multi_sensitive = True
+                        break
+
+            if is_explicit_plan or has_multi_sensitive:
+                summary, steps = self._build_plan_from_calls_or_prompt(user_prompt, all_calls)
+                plan = self.plan_manager.create_plan(
+                    session_id=session_id,
+                    device_id=device_id,
+                    summary=summary,
+                    steps=steps,
+                )
+                res_payload = {
+                    "status": "PLAN_PREVIEW_REQUIRED",
+                    "plan_id": plan.plan_id,
+                    "summary": plan.summary,
+                    "steps": [s.model_dump() for s in plan.steps],
+                }
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="PlanManager",
+                    status="PLAN_PREVIEW_REQUIRED",
+                    plan_id=plan.plan_id,
+                    output_payload=res_payload,
+                    pending_action={"plan_id": plan.plan_id},
+                    error=None
+                )
+
             tool_calls = None
             if getattr(message, "tool_calls", None):
                 tool_calls = [

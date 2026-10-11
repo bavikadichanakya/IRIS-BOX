@@ -7,5 +7,5 @@ __pycache__/
 *.pyd
 *.db
 *.wav
-models/
+/models/
 
