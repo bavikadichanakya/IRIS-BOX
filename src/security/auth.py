@@ -3,6 +3,8 @@ import hmac
 import secrets
 import logging
 from typing import Optional, Dict, Set
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import Request, HTTPException, status, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
 
