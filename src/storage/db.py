@@ -1,5 +1,6 @@
 import asyncio
 import aiosqlite
+import time
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import json
@@ -139,6 +140,15 @@ class Database:
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS speaker_profiles (
+                speaker_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                embedding_blob TEXT NOT NULL,
+                enrolled_samples INTEGER DEFAULT 1,
+                created_at REAL NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_device ON sessions(device_id);
             CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, turn_index);
             CREATE INDEX IF NOT EXISTS idx_tool_exec_session ON tool_executions(session_id);
@@ -149,6 +159,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_errors_session ON errors(session_id);
             CREATE INDEX IF NOT EXISTS idx_user_preferences_user ON user_preferences(user_id);
             CREATE INDEX IF NOT EXISTS idx_inferred_facts_user ON inferred_facts(user_id, confidence);
+            CREATE INDEX IF NOT EXISTS idx_speaker_profiles_role ON speaker_profiles(role);
         """)
         await self._conn.commit()
 
@@ -434,4 +445,66 @@ class Database:
             cursor = await self._conn.execute("SELECT * FROM errors ORDER BY timestamp")
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+    async def save_speaker_profile(
+        self,
+        speaker_id: str,
+        name: str,
+        role: str,
+        embedding_blob: str,
+        enrolled_samples: int = 1,
+        created_at: Optional[float] = None
+    ):
+        """Insert or replace a speaker profile in SQLite."""
+        if created_at is None:
+            created_at = time.time()
+        await self._conn.execute(
+            """
+            INSERT INTO speaker_profiles (speaker_id, name, role, embedding_blob, enrolled_samples, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(speaker_id) DO UPDATE SET
+                name=excluded.name,
+                role=excluded.role,
+                embedding_blob=excluded.embedding_blob,
+                enrolled_samples=excluded.enrolled_samples,
+                created_at=excluded.created_at
+            """,
+            (speaker_id, name, role, embedding_blob, enrolled_samples, created_at)
+        )
+        await self._conn.commit()
+
+    async def get_speaker_profile(self, speaker_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a single speaker profile by speaker_id."""
+        cursor = await self._conn.execute(
+            "SELECT speaker_id, name, role, embedding_blob, enrolled_samples, created_at FROM speaker_profiles WHERE speaker_id = ?",
+            (speaker_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def list_speaker_profiles(self) -> List[Dict[str, Any]]:
+        """Retrieve all registered speaker profiles."""
+        cursor = await self._conn.execute(
+            "SELECT speaker_id, name, role, embedding_blob, enrolled_samples, created_at FROM speaker_profiles ORDER BY created_at ASC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def delete_speaker_profile(self, speaker_id: str) -> bool:
+        """Delete a speaker profile by speaker_id. Returns True if a record was deleted."""
+        cursor = await self._conn.execute(
+            "DELETE FROM speaker_profiles WHERE speaker_id = ?",
+            (speaker_id,)
+        )
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    async def update_speaker_role(self, speaker_id: str, new_role: str) -> bool:
+        """Update the role of an existing speaker profile. Returns True if updated."""
+        cursor = await self._conn.execute(
+            "UPDATE speaker_profiles SET role = ? WHERE speaker_id = ?",
+            (new_role, speaker_id)
+        )
+        await self._conn.commit()
+        return cursor.rowcount > 0
 

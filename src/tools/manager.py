@@ -23,12 +23,14 @@ class ToolManager:
         permission_manager: Optional[PermissionManager] = None,
         event_bus: Optional[EventBus] = None,
         skill_registry: Optional[Any] = None,
+        voice_auth: Optional[Any] = None,
     ):
         reg = registry or ToolRegistry
         self.registry = reg() if inspect.isclass(reg) else reg
         self.permission_manager = permission_manager or PermissionManager()
         self.event_bus = event_bus or EventBus()
         self.skill_registry = skill_registry
+        self.voice_auth = voice_auth
         self._capabilities: Dict[str, Capability] = {}
         self._initialize_capabilities()
         if self.skill_registry and hasattr(self.skill_registry, "bridge_to_tool_manager"):
@@ -126,7 +128,39 @@ class ToolManager:
                 duration_ms=duration_ms
             )
 
-        # 1. Policy Evaluation
+        # 1. Voice-Gated Authorization Evaluation
+        speaker_info = ctx_data.get("speaker")
+        voice_auth = getattr(self, "voice_auth", None) or ctx_data.get("voice_auth")
+        if not voice_auth and speaker_info is not None:
+            try:
+                from src.security.voice_auth import VoiceGatedAuthorization
+                voice_auth = VoiceGatedAuthorization(event_bus=self.event_bus)
+            except Exception:
+                pass
+
+        if voice_auth and speaker_info is not None:
+            decision = voice_auth.authorize_tool_execution(speaker_info, name)
+            if not decision.authorized:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                error_reason = decision.reason or f"Voice authorization denied for tool '{name}'."
+                await self.event_bus.publish("tool.execution.denied", {"tool": name, "reason": error_reason}, trace=trace_ctx)
+                await self.event_bus.publish("tool.denied", {
+                    "tool_name": name,
+                    "status": ExecutionStatus.DENIED.value,
+                    "duration_ms": duration_ms,
+                    "error": error_reason,
+                    "context": ctx_data
+                }, trace=trace_ctx)
+                return ToolResult(
+                    status=ExecutionStatus.DENIED,
+                    tool_name=name,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    error=error_reason,
+                    duration_ms=duration_ms
+                )
+
+        # 2. Policy Evaluation
         allowed, reason = await self.permission_manager.evaluate(capability, context)
         if not allowed:
             duration_ms = (time.perf_counter() - start_time) * 1000.0

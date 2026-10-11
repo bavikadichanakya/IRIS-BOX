@@ -548,6 +548,7 @@ class IRISOrchestrator:
         confirmed: bool = False,
         confirmation_token: Optional[str] = None,
         user_id: str = "default",
+        speaker: Optional[Any] = None,
     ) -> AgentExecutionResult:
         """
         Process a user request using a multi-step ReAct loop with ToolManager.
@@ -879,6 +880,8 @@ class IRISOrchestrator:
                 "session_id": session_id,
                 "confirmed": confirmed,
             }
+            if speaker is not None:
+                context["speaker"] = speaker
 
             try:
                 tool_start = time.perf_counter()
@@ -1024,6 +1027,7 @@ class IRISOrchestrator:
         trace_id: str = "",
         confirmed: bool = False,
         user_id: str = "default",
+        speaker: Optional[Any] = None,
     ):
         """
         Stream LLM response tokens or tool execution results via ToolManager.
@@ -1178,6 +1182,8 @@ class IRISOrchestrator:
                         "device_type": device_type,
                         "confirmed": confirmed,
                     }
+                    if speaker is not None:
+                        context["speaker"] = speaker
                     tool_start = time.perf_counter()
                     tool_result: ToolResult = await self.tool_manager.execute_tool(
                         name=tool_name,

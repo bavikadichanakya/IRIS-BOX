@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import base64
-from typing import Optional
+from typing import Optional, Any, Dict, List
 from contextlib import asynccontextmanager
 
 from pydantic import BaseModel
@@ -29,6 +29,9 @@ from src.server.routers.plans import router as plans_router
 from src.server.routers.skills import router as skills_router
 from src.server.routers.dashboard import router as dashboard_router
 from src.server.routers.automation import router as automation_router
+from src.server.routers.biometrics import router as biometrics_router
+from src.security.speaker_registry import SpeakerRegistry
+from src.security.voice_auth import VoiceGatedAuthorization
 from src.automation import HomeAssistantWSClient, ProactiveSpeechDispatcher, ProactiveEngine
 from starlette.staticfiles import StaticFiles
 
@@ -111,6 +114,13 @@ async def lifespan(app: FastAPI):
     ha_client = HomeAssistantWSClient(event_bus=orchestrator.event_bus)
     await ha_client.start()
 
+    # Speaker Biometrics & Voice Authorization
+    speaker_reg = SpeakerRegistry(db=db)
+    await speaker_reg.load_from_db()
+    voice_auth = VoiceGatedAuthorization(event_bus=orchestrator.event_bus)
+    if hasattr(orchestrator, "tool_manager") and orchestrator.tool_manager:
+        orchestrator.tool_manager.voice_auth = voice_auth
+
     app.state.db = db
     app.state.memory_store = memory_store
     app.state.vector_store = vector_store
@@ -124,6 +134,8 @@ async def lifespan(app: FastAPI):
     app.state.ha_client = ha_client
     app.state.proactive_dispatcher = proactive_disp
     app.state.proactive_engine = proactive_eng
+    app.state.speaker_registry = speaker_reg
+    app.state.voice_auth = voice_auth
 
     health_supervisor.db_connection = db
     health_supervisor.orchestrator = orchestrator
@@ -199,6 +211,10 @@ app.include_router(skills_router, prefix="/api", dependencies=[Depends(verify_ap
 # Protected Ambient Automation API endpoints requiring authentication
 app.include_router(automation_router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
+# Protected Speaker Biometrics & Voice-Gated Authorization API endpoints requiring authentication
+app.include_router(biometrics_router, dependencies=[Depends(verify_api_key)])
+app.include_router(biometrics_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
 
 # Static Assets Mount
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -215,6 +231,7 @@ class ProcessRequestPayload(BaseModel):
     confirmation_token: Optional[str] = None
     confirmed: Optional[bool] = False
     user_id: Optional[str] = "default"
+    speaker: Optional[Any] = None
 
 class ConfirmRequestPayload(BaseModel):
     confirmation_token: str
@@ -234,7 +251,8 @@ async def process_orchestrator_request(payload: ProcessRequestPayload, request: 
         device_id=payload.device_id or "unknown",
         confirmed=bool(payload.confirmed),
         confirmation_token=payload.confirmation_token,
-        user_id=payload.user_id or "default"
+        user_id=payload.user_id or "default",
+        speaker=payload.speaker
     )
     if hasattr(result, "model_dump"):
         return result.model_dump()
@@ -291,6 +309,8 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
     # Send connected envelope
     await ws_mgr.send_payload(sess_id, OutboundConnectedPayload(session_id=sess_id, version="1.0"))
 
+    turn_audio_buffer = bytearray()
+
     try:
         while True:
             message = await websocket.receive()
@@ -299,6 +319,7 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                 break
 
             async def handle_speech_frame(pcm_data: bytes):
+                turn_audio_buffer.extend(pcm_data)
                 voice_pipe = getattr(websocket.app.state, "voice_pipeline", None)
                 is_speech = False
                 if voice_pipe:
@@ -359,6 +380,14 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                 if isinstance(msg, InboundPingPayload):
                     await ws_mgr.send_payload(sess_id, OutboundPongPayload(timestamp=msg.timestamp))
 
+                elif isinstance(msg, InboundAudioFramePayload):
+                    if msg.data:
+                        try:
+                            audio_bytes = base64.b64decode(msg.data)
+                            await handle_speech_frame(audio_bytes)
+                        except Exception:
+                            pass
+
                 elif isinstance(msg, InboundConnectPayload):
                     if msg.device_id and msg.device_id != "unknown":
                         dev_id = msg.device_id
@@ -382,6 +411,11 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                         start_t = time.time()
                         orchestrator = getattr(websocket.app.state, "orchestrator", None)
                         tts_engine = getattr(websocket.app.state, "tts_engine", None)
+                        speaker_reg = getattr(websocket.app.state, "speaker_registry", None)
+
+                        active_speaker = None
+                        if speaker_reg and len(turn_audio_buffer) >= 3200:
+                            active_speaker = speaker_reg.identify_speaker(bytes(turn_audio_buffer))
 
                         # Emit final transcript payload
                         await ws_mgr.send_payload(sess_id, OutboundTranscriptPayload(text=msg.text, is_final=True, request_id=request_id))
@@ -397,7 +431,8 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                                 user_prompt=msg.text,
                                 session_id=sess_id,
                                 device_id=dev_id,
-                                request_id=request_id
+                                request_id=request_id,
+                                speaker=active_speaker
                             ):
                                 if chunk.chunk_type in ("text_delta", "complete") and chunk.delta_text:
                                     await ws_mgr.send_payload(sess_id, OutboundTokenDeltaPayload(delta=chunk.delta_text, request_id=request_id))
@@ -437,10 +472,6 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                     t = asyncio.create_task(process_text_task())
                     ws_mgr.current_playback_tasks[sess_id] = t
                     ws_mgr.register_task(sess_id, t)
-
-                elif isinstance(msg, InboundAudioFramePayload):
-                    audio_bytes = base64.b64decode(msg.data)
-                    await handle_speech_frame(audio_bytes)
 
     except WebSocketDisconnect:
         pass
