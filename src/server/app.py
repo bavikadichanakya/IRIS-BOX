@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from src.security import (
     auth_manager,
     verify_api_key,
@@ -30,6 +30,8 @@ from src.server.routers.skills import router as skills_router
 from src.server.routers.dashboard import router as dashboard_router
 from src.server.routers.automation import router as automation_router
 from src.server.routers.biometrics import router as biometrics_router
+from src.server.routers.pairing import router as pairing_router
+from src.server.routers.notifications import router as notifications_router, broadcaster as notification_broadcaster
 from src.security.speaker_registry import SpeakerRegistry
 from src.security.voice_auth import VoiceGatedAuthorization
 from src.automation import HomeAssistantWSClient, ProactiveSpeechDispatcher, ProactiveEngine
@@ -121,6 +123,9 @@ async def lifespan(app: FastAPI):
     if hasattr(orchestrator, "tool_manager") and orchestrator.tool_manager:
         orchestrator.tool_manager.voice_auth = voice_auth
 
+    # Mobile Companion & Push Notifications Broadcaster
+    notification_broadcaster.init_bus_subscriptions(orchestrator.event_bus)
+
     app.state.db = db
     app.state.memory_store = memory_store
     app.state.vector_store = vector_store
@@ -136,6 +141,7 @@ async def lifespan(app: FastAPI):
     app.state.proactive_engine = proactive_eng
     app.state.speaker_registry = speaker_reg
     app.state.voice_auth = voice_auth
+    app.state.notification_broadcaster = notification_broadcaster
 
     health_supervisor.db_connection = db
     health_supervisor.orchestrator = orchestrator
@@ -215,11 +221,27 @@ app.include_router(automation_router, prefix="/api", dependencies=[Depends(verif
 app.include_router(biometrics_router, dependencies=[Depends(verify_api_key)])
 app.include_router(biometrics_router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
+# Protected & LAN Mobile Pairing API endpoints
+app.include_router(pairing_router)
+app.include_router(pairing_router, prefix="/api")
+
+# Protected LAN Push Notification Stream
+app.include_router(notifications_router, prefix="/api")
+
 
 # Static Assets Mount
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+# Mobile Companion PWA Shell Route
+@app.get("/mobile", response_class=FileResponse)
+async def get_mobile_companion():
+    """Serve the local air-gapped PWA mobile companion shell."""
+    mobile_html = os.path.join(os.path.dirname(__file__), "static", "mobile", "index.html")
+    if os.path.exists(mobile_html):
+        return FileResponse(mobile_html, media_type="text/html")
+    return HTMLResponse("<h1>IRIS Mobile Satellite Not Found</h1>", status_code=404)
 
 # Local Control Center Dashboard Routes (operates with or without auth)
 app.include_router(dashboard_router)

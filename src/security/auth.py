@@ -15,6 +15,9 @@ PUBLIC_PATHS: Set[str] = {
     "/",
     "/dashboard",
     "/api/dashboard/status",
+    "/mobile",
+    "/api/pairing/pair",
+    "/pairing/pair",
     "/health",
     "/health/live",
     "/health/ready",
@@ -53,6 +56,9 @@ class AuthManager:
 
     def register_device_token(self, device_id: str, token: str):
         self.device_tokens[device_id] = token
+
+    def revoke_device_token(self, device_id: str) -> bool:
+        return self.device_tokens.pop(device_id, None) is not None
 
     def validate_token(self, token: Optional[str], device_id: Optional[str] = None) -> bool:
         if not token:

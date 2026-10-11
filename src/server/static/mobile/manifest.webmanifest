@@ -1,0 +1,18 @@
+{
+  "name": "IRIS-BOX Mobile Companion",
+  "short_name": "IRIS Mobile",
+  "description": "Air-gapped voice satellite, remote console & smart home companion for IRIS-BOX",
+  "start_url": "/mobile",
+  "display": "standalone",
+  "background_color": "#0B0F19",
+  "theme_color": "#0B0F19",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/static/mobile/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

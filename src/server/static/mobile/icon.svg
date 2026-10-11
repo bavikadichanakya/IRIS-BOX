@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="irisGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="#0B0F19"/>
+  <circle cx="256" cy="256" r="160" fill="none" stroke="url(#irisGrad)" stroke-width="24" stroke-opacity="0.3"/>
+  <circle cx="256" cy="256" r="110" fill="none" stroke="url(#irisGrad)" stroke-width="32"/>
+  <circle cx="256" cy="256" r="48" fill="url(#irisGrad)"/>
+  <!-- Soundwave accents -->
+  <path d="M 256 70 L 256 100 M 256 412 L 256 442 M 70 256 L 100 256 M 412 256 L 442 256" stroke="url(#irisGrad)" stroke-width="16" stroke-linecap="round"/>
+</svg>

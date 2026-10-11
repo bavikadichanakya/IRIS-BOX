@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0B0F19">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="IRIS Satellite">
+    <title>IRIS-BOX Mobile Satellite</title>
+    
+    <!-- PWA Manifest & App Icons (Strictly Local) -->
+    <link rel="manifest" href="/static/mobile/manifest.webmanifest">
+    <link rel="icon" type="image/svg+xml" href="/static/mobile/icon.svg">
+    <link rel="apple-touch-icon" href="/static/mobile/icon.svg">
+    
+    <!-- Air-Gapped Local CSS -->
+    <link rel="stylesheet" href="/static/mobile/mobile.css">
+</head>
+<body>
+    <div id="appContainer" class="mobile-container">
+        <!-- Top App Bar -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="header-logo">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="9" stroke="#60A5FA" stroke-dasharray="2 2" />
+                        <circle cx="12" cy="12" r="5" stroke="#38BDF8" />
+                        <circle cx="12" cy="12" r="2" fill="#818CF8" />
+                    </svg>
+                </div>
+                <h1 class="header-title">IRIS Satellite</h1>
+            </div>
+            <div class="header-right">
+                <div id="connectionStatus" class="status-pill offline">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Ready</span>
+                </div>
+                <button id="disconnectBtn" class="btn-icon" title="Disconnect device" aria-label="Disconnect">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10" />
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- PWA Install Banner -->
+        <div id="installPrompt" class="install-banner hidden">
+            <div class="install-text">
+                <strong>Install IRIS Satellite</strong>
+                <span>Add to home screen for air-gapped handheld control</span>
+            </div>
+            <div class="install-actions">
+                <button id="installBtn" class="btn-sm btn-primary">Install</button>
+                <button id="dismissInstallBtn" class="btn-sm btn-ghost">Dismiss</button>
+            </div>
+        </div>
+
+        <main class="main-content">
+            <!-- Screen 1: Cryptographic LAN Pairing -->
+            <section id="pairingScreen" class="view-panel">
+                <div class="pairing-card">
+                    <div class="pairing-badge">
+                        <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" stroke="#60A5FA"/>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="#818CF8"/>
+                            <circle cx="12" cy="16" r="1.5" fill="#38BDF8"/>
+                        </svg>
+                    </div>
+                    <h2>LAN Satellite Pairing</h2>
+                    <p class="pairing-description">
+                        Open the primary IRIS-BOX Control Center on your local network to generate a single-use 6-digit PIN.
+                    </p>
+
+                    <div class="pin-input-group">
+                        <input 
+                            type="text" 
+                            id="pinInput" 
+                            class="pin-input" 
+                            placeholder="000000" 
+                            maxlength="6" 
+                            inputmode="numeric" 
+                            pattern="[0-9]*"
+                            autocomplete="one-time-code"
+                        />
+                        <button id="pairBtn" class="btn btn-primary btn-block">Pair Satellite</button>
+                    </div>
+
+                    <div id="pairError" class="alert-error" style="display: none;"></div>
+
+                    <div class="security-note">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                        <span>Zero-touch air-gapped cryptographic LAN pairing &bull; 5 min TTL</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Screen 2: Active Companion Console -->
+            <section id="companionScreen" class="view-panel hidden">
+                <!-- Voice Satellite Interactive Section -->
+                <div class="voice-console">
+                    <div class="mic-halo-wrapper">
+                        <div class="mic-pulse-ring"></div>
+                        <button id="micBtn" class="mic-action-btn" aria-label="Toggle Microphone">
+                            <svg class="mic-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                                <line x1="12" y1="19" x2="12" y2="23"/>
+                                <line x1="8" y1="23" x2="16" y2="23"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="micStatus" class="mic-status-label">Tap to Speak</div>
+                </div>
+
+                <!-- Live Duplex Transcript Box -->
+                <div class="section-container">
+                    <div class="section-header">
+                        <span class="section-title">Live Transcript</span>
+                    </div>
+                    <div id="transcriptBox" class="transcript-box">
+                        <div class="transcript-msg system">Ready for voice commands or ambient queries.</div>
+                    </div>
+                </div>
+
+                <!-- Proactive Ambient Notifications Feed -->
+                <div class="section-container">
+                    <div class="section-header">
+                        <div class="title-with-badge">
+                            <span class="section-title">LAN Notifications</span>
+                            <span id="notificationBadge" class="badge-count" style="display: none;">0</span>
+                        </div>
+                        <button id="clearNotifsBtn" class="btn-text">Clear</button>
+                    </div>
+                    <div id="notificationList" class="notification-feed">
+                        <!-- Populated by SSE stream -->
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Air-gapped Client Script -->
+    <script src="/static/mobile/mobile.js"></script>
+</body>
+</html>
