@@ -43,8 +43,9 @@ let isPlayingAudio = false;
 
 // DOM Elements
 let pairingScreen, companionScreen, pinInput, pairBtn, pairError;
-let micBtn, micStatus, connectionStatus, transcriptBox, notificationBadge;
+let micBtn, micStatus, micNotice, connectionStatus, transcriptBox, notificationBadge;
 let notificationList, clearNotifsBtn, disconnectBtn, installPrompt, installBtn, dismissInstallBtn;
+let promptInput, sendPromptBtn;
 
 function initDomRefs() {
     pairingScreen = document.getElementById('pairingScreen');
@@ -54,6 +55,7 @@ function initDomRefs() {
     pairError = document.getElementById('pairError');
     micBtn = document.getElementById('micBtn');
     micStatus = document.getElementById('micStatus');
+    micNotice = document.getElementById('micNotice');
     connectionStatus = document.getElementById('connectionStatus');
     transcriptBox = document.getElementById('transcriptBox');
     notificationBadge = document.getElementById('notificationBadge');
@@ -63,6 +65,8 @@ function initDomRefs() {
     installPrompt = document.getElementById('installPrompt');
     installBtn = document.getElementById('installBtn');
     dismissInstallBtn = document.getElementById('dismissInstallBtn');
+    promptInput = document.getElementById('promptInput');
+    sendPromptBtn = document.getElementById('sendPromptBtn');
 }
 
 // 1. Initialize UI and Service Worker
@@ -172,6 +176,16 @@ function setupEventListeners() {
     if (disconnectBtn) {
         disconnectBtn.addEventListener('click', handleDisconnect);
     }
+
+    if (sendPromptBtn) {
+        sendPromptBtn.addEventListener('click', sendTextMessage);
+    }
+
+    if (promptInput) {
+        promptInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') sendTextMessage();
+        });
+    }
 }
 
 // 3. Cryptographic LAN Pairing Flow
@@ -251,6 +265,58 @@ function handleDisconnect() {
 function initCompanionServices() {
     initWebSocket();
     initNotificationStream();
+    checkMicAvailability();
+}
+
+function checkMicAvailability() {
+    const hasMedia = navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
+    if (!hasMedia) {
+        if (micNotice) micNotice.classList.remove('hidden');
+        if (micStatus) micStatus.textContent = 'Mic blocked on HTTP (Use keyboard below)';
+    } else {
+        if (micNotice) micNotice.classList.add('hidden');
+        if (micStatus) micStatus.textContent = 'Tap to Speak';
+    }
+}
+
+async function sendTextMessage() {
+    if (!promptInput) return;
+    const text = promptInput.value.trim();
+    if (!text) return;
+    promptInput.value = '';
+
+    appendTranscript('user', text);
+    abortAudioPlayback();
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+            type: 'text_input',
+            text: text
+        }));
+    } else {
+        // Fallback to REST endpoint
+        try {
+            const resp = await fetch('/api/orchestrator/process', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${deviceToken}`
+                },
+                body: JSON.stringify({
+                    prompt: text,
+                    device_id: deviceId || 'mobile-device',
+                    session_id: 'mobile-session'
+                })
+            });
+            const data = await resp.json();
+            const reply = data.reply || data.response || data.text || (data.execution_result && data.execution_result.content);
+            if (reply) {
+                appendTranscript('assistant', reply);
+            }
+        } catch (err) {
+            appendTranscript('system', `Error sending command: ${err.message}`);
+        }
+    }
 }
 
 // WebSocket setup for duplex audio and transcripts
@@ -306,10 +372,12 @@ function handleTextMessage(dataStr) {
             return;
         }
 
-        if (type === 'stt_transcript') {
+        if (type === 'transcript' || type === 'stt_transcript') {
             appendTranscript('user', payload.text || payload.transcript);
-        } else if (type === 'llm_token') {
-            appendAssistantToken(payload.token);
+        } else if (type === 'token_delta' || type === 'llm_token') {
+            appendAssistantToken(payload.delta || payload.token);
+        } else if (type === 'turn_complete') {
+            activeAssistantParagraph = null;
         } else if (type === 'assistant_reply' || type === 'response_text') {
             appendTranscript('assistant', payload.text || payload.content);
         } else if (type === 'proactive_announcement') {
@@ -341,6 +409,12 @@ async function toggleMicrophone() {
 }
 
 async function startRecording() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        if (micNotice) micNotice.classList.remove('hidden');
+        alert('Microphone access is blocked by mobile browsers over plain HTTP.\n\nPlease type commands in the box below, or access via HTTPS or Chrome flag.');
+        return;
+    }
+
     initAudioContext();
     if (audioContext.state === 'suspended') {
         await audioContext.resume();

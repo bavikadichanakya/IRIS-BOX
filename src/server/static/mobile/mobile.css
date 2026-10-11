@@ -373,6 +373,67 @@ body {
   color: var(--text-muted);
 }
 
+.mic-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 0.75rem;
+  color: var(--warning-amber);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  margin-bottom: 1rem;
+  max-width: 340px;
+}
+
+/* Command Input Container */
+.command-input-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.command-input {
+  flex: 1;
+  height: 46px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  padding: 0 0.85rem;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.command-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 10px var(--border-glow);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.btn-send {
+  width: 46px;
+  height: 46px;
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%);
+  border: none;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.btn-send:active {
+  transform: scale(0.95);
+}
+
 /* Sections & Cards */
 .section-container {
   background: var(--bg-card);

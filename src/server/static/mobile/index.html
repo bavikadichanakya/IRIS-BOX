@@ -101,6 +101,14 @@
             <section id="companionScreen" class="view-panel hidden">
                 <!-- Voice Satellite Interactive Section -->
                 <div class="voice-console">
+                    <div id="micNotice" class="mic-notice hidden">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <line x1="12" y1="8" x2="12" y2="12"/>
+                            <line x1="12" y1="16" x2="12.01" y2="16"/>
+                        </svg>
+                        <span>Mobile browser mic requires HTTPS or Chrome Flag. You can type commands below!</span>
+                    </div>
                     <div class="mic-halo-wrapper">
                         <div class="mic-pulse-ring"></div>
                         <button id="micBtn" class="mic-action-btn" aria-label="Toggle Microphone">
@@ -113,6 +121,23 @@
                         </button>
                     </div>
                     <div id="micStatus" class="mic-status-label">Tap to Speak</div>
+                </div>
+
+                <!-- Text Command Input Bar -->
+                <div class="command-input-container">
+                    <input 
+                        type="text" 
+                        id="promptInput" 
+                        class="command-input" 
+                        placeholder="Type a command (e.g. status, time)..."
+                        autocomplete="off"
+                    />
+                    <button id="sendPromptBtn" class="btn-send" aria-label="Send Command">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </button>
                 </div>
 
                 <!-- Live Duplex Transcript Box -->
