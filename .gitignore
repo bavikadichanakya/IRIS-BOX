@@ -8,4 +8,6 @@ __pycache__/
 *.db
 *.wav
 /models/
+data/
+
 

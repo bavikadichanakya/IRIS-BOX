@@ -3,6 +3,7 @@ name = "iris-backend"
 version = "0.1.0"
 dependencies = [
     "aiosqlite>=0.22.1",
+    "chromadb>=0.4.22",
     "edge-tts>=7.2.8",
     "faster-whisper>=1.0.0",
     "onnxruntime>=1.30.0",
@@ -10,6 +11,7 @@ dependencies = [
     "openwakeword>=0.4.0",
     "pydantic>=2.0.0",
     "requests>=2.31.0",
+    "sentence-transformers>=2.2.0",
     "sounddevice>=0.5.5",
 ]
 

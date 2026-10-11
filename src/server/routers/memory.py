@@ -155,3 +155,107 @@ async def delete_fact(
             detail=f"Fact with ID {fact_id} not found."
         )
     return {"status": "deleted", "fact_id": fact_id}
+
+
+# ==========================================
+# Semantic Vector Memory & RAG Endpoints
+# ==========================================
+
+class NoteCreatePayload(BaseModel):
+    note: str = Field(..., min_length=1, description="Episodic note or fact content")
+    category: Optional[str] = Field("general", description="Category or tag")
+    user_id: Optional[str] = Field("default", description="User ID")
+
+
+def get_vector_store(request: Request) -> Optional[Any]:
+    store = getattr(request.app.state, "vector_store", None)
+    if store is not None:
+        return store
+    try:
+        from src.memory.vector_store import VectorMemoryStore
+        return VectorMemoryStore()
+    except Exception as e:
+        return None
+
+
+@router.get("/semantic/search")
+async def search_semantic_memory(
+    request: Request,
+    q: str = Query(..., min_length=1, description="Semantic search query"),
+    limit: Optional[int] = Query(None, ge=1, le=20, description="Max results"),
+    threshold: Optional[float] = Query(None, ge=0.0, le=1.0, description="Cosine similarity threshold"),
+):
+    """Test semantic retrieval with score inspection across episodic vector collections."""
+    from src.config.settings import settings
+    effective_limit = limit if limit is not None else settings.RAG_MAX_RESULTS
+    effective_threshold = threshold if threshold is not None else settings.RAG_SIMILARITY_THRESHOLD
+
+    vstore = get_vector_store(request)
+    if not vstore:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vector memory store is unavailable.",
+        )
+    results = vstore.search_relevant(query=q, limit=effective_limit, threshold=effective_threshold)
+    return {
+        "query": q,
+        "count": len(results),
+        "threshold": effective_threshold,
+        "results": [r.model_dump() for r in results],
+    }
+
+
+@router.post("/semantic/notes", status_code=status.HTTP_201_CREATED)
+async def add_semantic_note(
+    payload: NoteCreatePayload,
+    request: Request,
+):
+    """Add an explicit episodic note or fact to the semantic vector store."""
+    vstore = get_vector_store(request)
+    if not vstore:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vector memory store is unavailable.",
+        )
+    memory_id = vstore.add_note(
+        note=payload.note,
+        category=payload.category or "general",
+        user_id=payload.user_id or "default",
+    )
+    if not memory_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to index note: local embedding engine is unavailable offline.",
+        )
+    return {
+        "status": "created",
+        "memory_id": memory_id,
+        "note": payload.note,
+        "category": payload.category or "general",
+        "user_id": payload.user_id or "default",
+    }
+
+
+@router.delete("/semantic/{memory_id}")
+async def delete_semantic_memory(
+    memory_id: str,
+    request: Request,
+):
+    """Remove a semantic memory entry by ID across all collections."""
+    vstore = get_vector_store(request)
+    if not vstore:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vector memory store is unavailable.",
+        )
+    deleted = vstore.delete_memory(memory_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Semantic memory with ID '{memory_id}' not found.",
+        )
+    return {
+        "status": "deleted",
+        "memory_id": memory_id,
+    }
+

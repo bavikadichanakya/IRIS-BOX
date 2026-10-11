@@ -93,8 +93,17 @@ async def lifespan(app: FastAPI):
     tts_eng = TTSEngine(online_fallback=False)
     voice_pipe = VoicePipeline(orchestrator=orchestrator, tts=tts_eng)
 
+    vector_store = getattr(orchestrator, "vector_store", None)
+    if vector_store is None:
+        try:
+            from src.memory.vector_store import VectorMemoryStore
+            vector_store = VectorMemoryStore()
+        except Exception:
+            vector_store = None
+
     app.state.db = db
     app.state.memory_store = memory_store
+    app.state.vector_store = vector_store
     app.state.plan_manager = plan_manager
     app.state.skill_registry = skill_registry
     app.state.orchestrator = orchestrator
@@ -116,6 +125,8 @@ async def lifespan(app: FastAPI):
     health_supervisor.ws_manager = None
     if hasattr(app.state, "orchestrator"):
         del app.state.orchestrator
+    if hasattr(app.state, "vector_store"):
+        del app.state.vector_store
     if hasattr(app.state, "memory_store"):
         del app.state.memory_store
     if hasattr(app.state, "plan_manager"):
