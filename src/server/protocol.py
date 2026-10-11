@@ -104,6 +104,12 @@ class OutboundAudioOutputPayload(BaseModel):
     data: str  # Base64-encoded audio bytes
 
 
+class OutboundAudioFlushPayload(BaseModel):
+    type: Literal["audio_flush"] = "audio_flush"
+    reason: str = "barge_in"
+    timestamp: float = Field(default_factory=time.time)
+
+
 class OutboundTurnCompletePayload(BaseModel):
     type: Literal["turn_complete"] = "turn_complete"
     request_id: str

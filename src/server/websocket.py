@@ -21,6 +21,7 @@ from src.server.protocol import (
     OutboundTokenDeltaPayload,
     OutboundToolStatusPayload,
     OutboundAudioOutputPayload,
+    OutboundAudioFlushPayload,
     OutboundTurnCompletePayload,
     OutboundErrorPayload,
     parse_inbound_message,
@@ -34,7 +35,7 @@ logger = logging.getLogger("iris.server.websocket")
 class WebSocketConnectionManager:
     """
     Manages client WebSocket connections, active task lifecycle, cancellation on disconnect,
-    and EventBus telemetry correlation for IRIS-BOX devices.
+    duplex barge-in playback cancellation, and EventBus telemetry correlation for IRIS-BOX devices.
     """
 
     def __init__(self, event_bus: Optional[EventBus] = None):
@@ -43,6 +44,7 @@ class WebSocketConnectionManager:
         self.session_to_device: Dict[str, str] = {}         # session_id -> device_id
         self.device_to_session: Dict[str, str] = {}         # device_id -> session_id
         self.active_tasks: Dict[str, Set[asyncio.Task]] = {} # session_id -> Set[Task]
+        self.current_playback_tasks: Dict[str, asyncio.Task] = {} # session_id -> active playback/streaming task
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, device_id: str, session_id: str):
@@ -97,8 +99,17 @@ class WebSocketConnectionManager:
         if session_id in self.active_tasks:
             self.active_tasks[session_id].discard(task)
 
+    def cancel_playback(self, session_id: str) -> bool:
+        """Cancel the active streaming playback task for session_id (used by duplex barge-in)."""
+        task = self.current_playback_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+            return True
+        return False
+
     def cancel_tasks_sync(self, session_id: str) -> int:
         """Synchronously cancel all tasks registered for session_id."""
+        self.cancel_playback(session_id)
         tasks = self.active_tasks.get(session_id, set())
         count = 0
         for task in list(tasks):

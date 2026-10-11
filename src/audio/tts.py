@@ -4,7 +4,7 @@ import shutil
 import asyncio
 import logging
 import subprocess
-from typing import AsyncGenerator, Optional, Dict, Any, List
+from typing import AsyncGenerator, AsyncIterator, Optional, Dict, Any, List
 from unittest.mock import Mock
 
 try:
@@ -92,7 +92,7 @@ class TTSEngine:
         ]
 
     async def stream_audio(
-        self, text: str, voice: Optional[str] = None
+        self, text: str, voice: Optional[str] = None, chunk_size: int = 2048
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio bytes for the supplied text. Offline Piper synthesis is prioritized."""
         voice = voice or self.voice
@@ -115,27 +115,68 @@ class TTSEngine:
                 raise RuntimeError("ONNX model not found")
 
             command = await self._get_piper_command(text, voice, self.rate, self.pitch)
+            proc = None
             try:
-                # Capture output as raw binary bytes from stdin piping
-                proc = subprocess.run(
-                    command,
-                    input=text.encode("utf-8"),
-                    capture_output=True,
-                    text=False,
-                    check=True
+                # Asynchronous subprocess streaming for progressive chunk delivery
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                audio_data = proc.stdout
-                if not audio_data:
-                    raise RuntimeError("Piper generated empty audio buffer")
-                yield audio_data
-                if self.cache_common_phrases:
-                    self._cache[text] = audio_data
-                return
-            except subprocess.CalledProcessError as exc:
-                err_msg = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
-                logger.error("Piper synthesis failed: %s", err_msg)
-                raise RuntimeError(f"TTS synthesis failed: Piper execution error ({err_msg})")
+                proc.stdin.write(text.encode("utf-8"))
+                await proc.stdin.drain()
+                proc.stdin.close()
 
+                full_data = bytearray()
+                while True:
+                    chunk = await proc.stdout.read(chunk_size)
+                    if not chunk:
+                        break
+                    full_data.extend(chunk)
+                    yield chunk
+
+                await proc.wait()
+                if proc.returncode != 0:
+                    err_msg = (await proc.stderr.read()).decode("utf-8", errors="replace")
+                    logger.error("Piper synthesis failed: %s", err_msg)
+                    raise RuntimeError(f"TTS synthesis failed: Piper execution error ({err_msg})")
+
+                if not full_data:
+                    raise RuntimeError("Piper generated empty audio buffer")
+
+                if self.cache_common_phrases:
+                    self._cache[text] = bytes(full_data)
+                return
+            except asyncio.CancelledError:
+                if proc:
+                    try:
+                        proc.kill()
+                    except (ProcessLookupError, Exception):
+                        pass
+                    await proc.wait()
+                raise
+            except (NotImplementedError, AttributeError):
+                # Fallback to subprocess.run if event loop does not support async subprocess
+                try:
+                    proc_sync = subprocess.run(
+                        command,
+                        input=text.encode("utf-8"),
+                        capture_output=True,
+                        text=False,
+                        check=True
+                    )
+                    audio_data = proc_sync.stdout
+                    if not audio_data:
+                        raise RuntimeError("Piper generated empty audio buffer")
+                    yield audio_data
+                    if self.cache_common_phrases:
+                        self._cache[text] = audio_data
+                    return
+                except subprocess.CalledProcessError as exc:
+                    err_msg = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
+                    logger.error("Piper synthesis failed: %s", err_msg)
+                    raise RuntimeError(f"TTS synthesis failed: Piper execution error ({err_msg})")
         # 3. Optional Edge-TTS online fallback if explicitly enabled/available
         if self.online_fallback:
             if edge_tts is None:
@@ -159,6 +200,27 @@ class TTSEngine:
 
         # 4. No synthesis engine available
         raise RuntimeError("Piper not found")
+
+    async def synthesize_stream(
+        self, text_stream: AsyncIterator[str], chunk_size: int = 2048, voice: Optional[str] = None
+    ) -> AsyncGenerator[bytes, None]:
+        """
+        Consumes streaming sentence chunks from text_stream, synthesizes each via Piper stdin,
+        and yields binary audio chunks progressively as they arrive from stdout.
+        Supports cooperative cancellation: terminates process immediately on CancelledError.
+        """
+        voice = voice or self.voice
+        async for sentence in text_stream:
+            clean = sentence.strip()
+            if not clean:
+                continue
+            try:
+                async for pcm_chunk in self.stream_audio(clean, voice=voice, chunk_size=chunk_size):
+                    yield pcm_chunk
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("TTS synthesis error for sentence '%s': %s", clean, e)
 
     async def speak(self, text: str, voice: Optional[str] = None) -> bytes:
         """Speak the text and return full aggregate audio bytes."""

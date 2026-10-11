@@ -88,7 +88,7 @@ class RuntimeMetrics:
             self.tool_failures[tool_name] = self.tool_failures.get(tool_name, 0) + 1
 
         # Voice metrics
-        if topic in ("voice.barge_in", "voice.tts.interrupted"):
+        if topic in ("voice.barge_in", "voice.tts.interrupted", "voice.barge_in.triggered"):
             self.voice_barge_in_count += 1
         elif topic == "voice.stt.completed":
             dur = payload.get("duration_ms", 0.0)

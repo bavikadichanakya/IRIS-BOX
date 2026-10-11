@@ -86,11 +86,19 @@ def test_websocket_text_input_streaming(client):
     from unittest.mock import patch, MagicMock
     from src.models.schemas import AgentExecutionResult
 
+    from src.models.schemas import StreamChunkPayload
+
     mock_result = AgentExecutionResult(success=True, tool_name="", output_payload={"response": "Hello!"})
-    if hasattr(app.state, "orchestrator") and app.state.orchestrator:
-        p = patch.object(app.state.orchestrator, "process_request", return_value=mock_result)
+
+    async def mock_stream_request(*args, **kwargs):
+        yield StreamChunkPayload(chunk_type="text_delta", delta_text="Hello there! ", session_id="s1")
+        yield StreamChunkPayload(chunk_type="complete", delta_text="", session_id="s1")
+
+    orch = getattr(app.state, "orchestrator", None)
+    if orch:
+        p = patch.object(orch, "stream_request", side_effect=mock_stream_request)
     else:
-        p = patch("src.agent.orchestrator.IRISOrchestrator.process_request", return_value=mock_result)
+        p = patch("src.agent.orchestrator.IRISOrchestrator.stream_request", side_effect=mock_stream_request)
 
     with p:
         url = f"/v1/ws?device_id=living-room&token={auth_manager.master_key}"

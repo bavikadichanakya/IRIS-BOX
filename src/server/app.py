@@ -48,7 +48,7 @@ import uuid
 import time
 import asyncio
 
-from src.voice.pipeline import VoicePipeline
+from src.voice.pipeline import VoicePipeline, VoicePipelineState
 from src.server.websocket import ws_manager, WebSocketConnectionManager
 from src.server.protocol import (
     InboundConnectPayload,
@@ -64,10 +64,13 @@ from src.server.protocol import (
     OutboundTokenDeltaPayload,
     OutboundToolStatusPayload,
     OutboundAudioOutputPayload,
+    OutboundAudioFlushPayload,
     OutboundTurnCompletePayload,
     OutboundErrorPayload,
     parse_inbound_message,
 )
+from src.audio.chunker import SentenceChunker
+from src.observability.tracing import create_trace_context
 
 logger = logging.getLogger("iris")
 
@@ -260,16 +263,47 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
             if message.get("type") == "websocket.disconnect":
                 break
 
+            async def handle_speech_frame(pcm_data: bytes):
+                voice_pipe = getattr(websocket.app.state, "voice_pipeline", None)
+                is_speech = False
+                if voice_pipe:
+                    res = await voice_pipe.process_audio_chunk(pcm_data)
+                    is_speech = res.get("is_speech", False)
+
+                if not is_speech and len(pcm_data) >= 2:
+                    try:
+                        import struct, math
+                        num_s = len(pcm_data) // 2
+                        samples = struct.unpack(f"<{num_s}h", pcm_data[:num_s * 2])
+                        rms = math.sqrt(sum(s * s for s in samples) / num_s) / 32768.0
+                        if rms > 0.015:
+                            is_speech = True
+                    except Exception:
+                        pass
+
+                if is_speech:
+                    await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_START"))
+                    if ws_mgr.cancel_playback(sess_id):
+                        logger.info(f"Duplex barge-in triggered for session '{sess_id}'")
+                        await ws_mgr.send_payload(sess_id, OutboundAudioFlushPayload(reason="barge_in"))
+                        eb = getattr(websocket.app.state, "event_bus", None) or ws_mgr.event_bus
+                        trace = create_trace_context(device_id=dev_id, session_id=sess_id)
+                        if eb:
+                            await eb.publish(
+                                "voice.barge_in.triggered",
+                                {"session_id": sess_id, "device_id": dev_id},
+                                trace=trace,
+                            )
+                        runtime_metrics.voice_barge_in_count += 1
+                        if voice_pipe and hasattr(voice_pipe, "set_state"):
+                            await voice_pipe.set_state(VoicePipelineState.LISTENING, trace_context=trace)
+                else:
+                    await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_END"))
+
             # 1. Handle binary frame
             if "bytes" in message and message["bytes"]:
                 raw_bytes = message["bytes"]
-                voice_pipe = getattr(websocket.app.state, "voice_pipeline", None)
-                if voice_pipe:
-                    res = await voice_pipe.process_audio_chunk(raw_bytes)
-                    if res.get("is_speech"):
-                        await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_START"))
-                    else:
-                        await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_END"))
+                await handle_speech_frame(raw_bytes)
                 continue
 
             # 2. Handle text frame
@@ -321,23 +355,9 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                             await ws_mgr.send_payload(sess_id, OutboundErrorPayload(code="ORCHESTRATOR_UNAVAILABLE", message="Orchestrator not ready"))
                             return
 
-                        sentence_buf = ""
-                        delimiters = re.compile(r"([.!?\n]+(?:\s+|$))")
+                        chunker = SentenceChunker(min_words=4)
 
-                        async def send_tts_chunk(text_part: str):
-                            if not tts_engine:
-                                return
-                            clean = text_part.strip()
-                            if not clean:
-                                return
-                            try:
-                                async for pcm_chunk in tts_engine.stream_audio(clean):
-                                    b64_pcm = base64.b64encode(pcm_chunk).decode("utf-8")
-                                    await ws_mgr.send_payload(sess_id, OutboundAudioOutputPayload(format="pcm16", data=b64_pcm))
-                            except Exception as e:
-                                logger.warning(f"TTS synthesis skipped: {e}")
-
-                        try:
+                        async def sentence_generator():
                             async for chunk in orchestrator.stream_request(
                                 user_prompt=msg.text,
                                 session_id=sess_id,
@@ -346,45 +366,46 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                             ):
                                 if chunk.chunk_type in ("text_delta", "complete") and chunk.delta_text:
                                     await ws_mgr.send_payload(sess_id, OutboundTokenDeltaPayload(delta=chunk.delta_text, request_id=request_id))
-                                    sentence_buf += chunk.delta_text
-                                    parts = delimiters.split(sentence_buf)
-                                    if len(parts) > 2:
-                                        ready = "".join(parts[:-1]).strip()
-                                        sentence_buf = parts[-1]
-                                        if ready:
-                                            await send_tts_chunk(ready)
-
+                                    for s in chunker.add_token(chunk.delta_text):
+                                        yield s
                                 elif chunk.chunk_type == "tool_call":
                                     await ws_mgr.send_payload(sess_id, OutboundToolStatusPayload(tool_name=chunk.tool_name or "unknown", status="INVOKING"))
                                 elif chunk.chunk_type == "tool_result":
                                     await ws_mgr.send_payload(sess_id, OutboundToolStatusPayload(tool_name=chunk.tool_name or "unknown", status="COMPLETED", output_payload=chunk.tool_output))
 
-                            if sentence_buf.strip():
-                                await send_tts_chunk(sentence_buf.strip())
+                            for s in chunker.flush():
+                                yield s
+
+                        try:
+                            if tts_engine:
+                                async for pcm_chunk in tts_engine.synthesize_stream(sentence_generator()):
+                                    b64_pcm = base64.b64encode(pcm_chunk).decode("utf-8")
+                                    await ws_mgr.send_payload(sess_id, OutboundAudioOutputPayload(format="pcm16", data=b64_pcm))
+                            else:
+                                async for _ in sentence_generator():
+                                    pass
 
                             duration = (time.time() - start_t) * 1000.0
                             await ws_mgr.send_payload(sess_id, OutboundTurnCompletePayload(request_id=request_id, duration_ms=round(duration, 2)))
 
                         except asyncio.CancelledError:
-                            logger.info(f"Text processing cancelled for request_id '{request_id}'")
+                            logger.info(f"Text processing / audio playback cancelled for request_id '{request_id}'")
                             raise
                         except Exception as err:
                             await ws_mgr.send_payload(sess_id, OutboundErrorPayload(code="PROCESSING_ERROR", message=str(err)))
                             duration = (time.time() - start_t) * 1000.0
                             await ws_mgr.send_payload(sess_id, OutboundTurnCompletePayload(request_id=request_id, duration_ms=round(duration, 2)))
+                        finally:
+                            if ws_mgr.current_playback_tasks.get(sess_id) == t:
+                                ws_mgr.current_playback_tasks.pop(sess_id, None)
 
                     t = asyncio.create_task(process_text_task())
+                    ws_mgr.current_playback_tasks[sess_id] = t
                     ws_mgr.register_task(sess_id, t)
 
                 elif isinstance(msg, InboundAudioFramePayload):
                     audio_bytes = base64.b64decode(msg.data)
-                    voice_pipe = getattr(websocket.app.state, "voice_pipeline", None)
-                    if voice_pipe:
-                        res = await voice_pipe.process_audio_chunk(audio_bytes)
-                        if res.get("is_speech"):
-                            await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_START"))
-                        else:
-                            await ws_mgr.send_payload(sess_id, OutboundVADPayload(state="SPEECH_END"))
+                    await handle_speech_frame(audio_bytes)
 
     except WebSocketDisconnect:
         pass
