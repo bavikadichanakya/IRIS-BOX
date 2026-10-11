@@ -8,9 +8,29 @@
  * - Progressive Web App Service Worker registration
  */
 
+function getSafeStorage(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+function setSafeStorage(key, val) {
+    try {
+        localStorage.setItem(key, val);
+    } catch {}
+}
+
+function removeSafeStorage(key) {
+    try {
+        localStorage.removeItem(key);
+    } catch {}
+}
+
 // State
-let deviceToken = localStorage.getItem('iris_device_token') || null;
-let deviceId = localStorage.getItem('iris_device_id') || null;
+let deviceToken = getSafeStorage('iris_device_token');
+let deviceId = getSafeStorage('iris_device_id');
 let audioContext = null;
 let mediaStream = null;
 let scriptProcessor = null;
@@ -22,25 +42,32 @@ let currentAudioSource = null;
 let isPlayingAudio = false;
 
 // DOM Elements
-const pairingScreen = document.getElementById('pairingScreen');
-const companionScreen = document.getElementById('companionScreen');
-const pinInput = document.getElementById('pinInput');
-const pairBtn = document.getElementById('pairBtn');
-const pairError = document.getElementById('pairError');
-const micBtn = document.getElementById('micBtn');
-const micStatus = document.getElementById('micStatus');
-const connectionStatus = document.getElementById('connectionStatus');
-const transcriptBox = document.getElementById('transcriptBox');
-const notificationBadge = document.getElementById('notificationBadge');
-const notificationList = document.getElementById('notificationList');
-const clearNotifsBtn = document.getElementById('clearNotifsBtn');
-const disconnectBtn = document.getElementById('disconnectBtn');
-const installPrompt = document.getElementById('installPrompt');
-const installBtn = document.getElementById('installBtn');
-const dismissInstallBtn = document.getElementById('dismissInstallBtn');
+let pairingScreen, companionScreen, pinInput, pairBtn, pairError;
+let micBtn, micStatus, connectionStatus, transcriptBox, notificationBadge;
+let notificationList, clearNotifsBtn, disconnectBtn, installPrompt, installBtn, dismissInstallBtn;
+
+function initDomRefs() {
+    pairingScreen = document.getElementById('pairingScreen');
+    companionScreen = document.getElementById('companionScreen');
+    pinInput = document.getElementById('pinInput');
+    pairBtn = document.getElementById('pairBtn');
+    pairError = document.getElementById('pairError');
+    micBtn = document.getElementById('micBtn');
+    micStatus = document.getElementById('micStatus');
+    connectionStatus = document.getElementById('connectionStatus');
+    transcriptBox = document.getElementById('transcriptBox');
+    notificationBadge = document.getElementById('notificationBadge');
+    notificationList = document.getElementById('notificationList');
+    clearNotifsBtn = document.getElementById('clearNotifsBtn');
+    disconnectBtn = document.getElementById('disconnectBtn');
+    installPrompt = document.getElementById('installPrompt');
+    installBtn = document.getElementById('installBtn');
+    dismissInstallBtn = document.getElementById('dismissInstallBtn');
+}
 
 // 1. Initialize UI and Service Worker
 window.addEventListener('DOMContentLoaded', async () => {
+    initDomRefs();
     initServiceWorker();
     setupPwaInstallPrompt();
 
@@ -56,13 +83,13 @@ window.addEventListener('DOMContentLoaded', async () => {
 
 // Service Worker Registration (Air-gapped)
 function initServiceWorker() {
-    if ('serviceWorker' in navigator) {
+    if ('serviceWorker' in navigator && (window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
         navigator.serviceWorker.register('/static/mobile/sw.js')
             .then(reg => {
                 console.log('[IRIS Mobile] Service Worker registered with scope:', reg.scope);
             })
             .catch(err => {
-                console.warn('[IRIS Mobile] Service Worker registration failed:', err);
+                console.warn('[IRIS Mobile] Service Worker registration skipped/failed:', err);
             });
     }
 }
@@ -177,10 +204,10 @@ async function handlePair() {
             throw new Error(data.detail || 'Pairing failed');
         }
 
-        deviceToken = data.device_token;
+        deviceToken = data.device_token || data.token;
         deviceId = data.device_id;
-        localStorage.setItem('iris_device_token', deviceToken);
-        localStorage.setItem('iris_device_id', deviceId);
+        setSafeStorage('iris_device_token', deviceToken);
+        setSafeStorage('iris_device_id', deviceId);
 
         showCompanion();
         initCompanionServices();
@@ -212,8 +239,8 @@ function handleDisconnect() {
     if (eventSource) eventSource.close();
     if (socket) socket.close();
 
-    localStorage.removeItem('iris_device_token');
-    localStorage.removeItem('iris_device_id');
+    removeSafeStorage('iris_device_token');
+    removeSafeStorage('iris_device_id');
     deviceToken = null;
     deviceId = null;
 
