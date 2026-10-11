@@ -27,6 +27,8 @@ from src.server.fleet import FleetManager, router as fleet_router
 from src.server.routers.memory import router as memory_router
 from src.server.routers.plans import router as plans_router
 from src.server.routers.skills import router as skills_router
+from src.server.routers.dashboard import router as dashboard_router
+from starlette.staticfiles import StaticFiles
 from src.skills.registry import SkillRegistry
 from src.agent.plan_manager import PlanManager
 from src.storage.memory_store import MemoryStore
@@ -159,6 +161,14 @@ app.include_router(plans_router, prefix="/api", dependencies=[Depends(verify_api
 # Protected Skills & Plugins API endpoints requiring authentication
 app.include_router(skills_router, dependencies=[Depends(verify_api_key)])
 app.include_router(skills_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
+# Static Assets Mount
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+# Local Control Center Dashboard Routes (operates with or without auth)
+app.include_router(dashboard_router)
 
 class ProcessRequestPayload(BaseModel):
     prompt: str

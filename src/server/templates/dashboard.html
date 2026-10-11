@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IRIS-BOX Control Center</title>
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+  <div class="dashboard-container">
+    <!-- 1. Header & Connection Status -->
+    <header class="header-bar">
+      <div class="brand-section">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">IRIS-BOX Control Center</h1>
+          <div class="brand-subtitle">Air-Gapped Autonomous Agent Node</div>
+        </div>
+      </div>
+
+      <div class="header-controls">
+        <!-- Live Server Heartbeat -->
+        <div class="heartbeat-badge" id="heartbeat-status">
+          <span class="pulse-dot" id="heartbeat-dot"></span>
+          <span id="heartbeat-text">CONNECTING...</span>
+        </div>
+
+        <!-- Master Auth Token Container -->
+        <div class="token-container">
+          <span class="token-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            Token
+          </span>
+          <input type="password" id="master-token-input" class="token-input" placeholder="Enter master key...">
+          <button id="save-token-btn" class="btn-primary" title="Save master token to local storage">
+            Save
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 6. Telemetry & Metrics Cards -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--cyan-neon)" stroke-width="2">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+          Telemetry &amp; Operational Metrics
+        </h2>
+      </div>
+      <div class="telemetry-grid">
+        <div class="stat-card">
+          <div class="stat-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Total Requests</span>
+            <span class="stat-value" id="metric-total-requests">0</span>
+            <span class="stat-subtext">Processed lifetime commands</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon" style="color: var(--emerald-neon); background: rgba(16, 185, 129, 0.1);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Success Rate</span>
+            <span class="stat-value" id="metric-success-rate">100%</span>
+            <span class="stat-subtext">Zero error SLA</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon" style="color: var(--amber-neon); background: rgba(245, 158, 11, 0.1);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Average Latency</span>
+            <span class="stat-value" id="metric-avg-latency">0 ms</span>
+            <span class="stat-subtext">Tool &amp; inference response</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon" style="color: var(--indigo-neon); background: rgba(99, 102, 241, 0.1);">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Tool Invocations</span>
+            <span class="stat-value" id="metric-tool-invocations">0</span>
+            <span class="stat-subtext">Air-gapped capability executions</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Subsystem Matrix -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--cyan-neon)" stroke-width="2">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+            <line x1="6" y1="6" x2="6.01" y2="6"></line>
+            <line x1="6" y1="18" x2="6.01" y2="18"></line>
+          </svg>
+          Subsystem Status Matrix
+        </h2>
+        <span class="section-badge">6 Subsystems Monitored</span>
+      </div>
+      <div class="subsystem-grid" id="subsystem-grid">
+        <!-- Subsystems dynamically populated by dashboard.js -->
+        <div class="empty-state">Loading subsystem health...</div>
+      </div>
+    </section>
+
+    <!-- 3. Interactive Approval Center -->
+    <section class="card-panel">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--amber-neon)" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          Interactive Plan Approval Center
+        </h2>
+        <span class="section-badge" id="plans-count-badge">0 Staged</span>
+      </div>
+      <div class="approval-list" id="plans-container">
+        <div class="empty-state">No pending plans requiring review. System ready.</div>
+      </div>
+    </section>
+
+    <!-- 4. Skills & Integrations Explorer -->
+    <section class="card-panel">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--indigo-neon)" stroke-width="2">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+          </svg>
+          Skills &amp; Integrations Explorer
+        </h2>
+        <span class="section-badge" id="skills-count-badge">Loaded</span>
+      </div>
+      <div class="skills-grid" id="skills-container">
+        <div class="empty-state">Loading registered skills...</div>
+      </div>
+    </section>
+
+    <!-- 5. Memory & Preferences Inspector -->
+    <section class="card-panel">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--emerald-neon)" stroke-width="2">
+            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.93V17a1 1 0 0 1-2 0v-.07A7.07 7.07 0 0 1 5.07 11H5a1 1 0 0 1 0-2h.07A7.07 7.07 0 0 1 11 5.07V5a1 1 0 0 1 2 0v.07A7.07 7.07 0 0 1 18.93 11H19a1 1 0 0 1 0 2h-.07A7.07 7.07 0 0 1 13 16.93z"></path>
+          </svg>
+          Personal Memory &amp; Preferences Inspector
+        </h2>
+      </div>
+
+      <div class="memory-layout">
+        <!-- Explicit Preferences -->
+        <div class="memory-subpanel">
+          <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-primary);">
+            Explicit User Preferences
+          </h3>
+          <div class="inline-form">
+            <input type="text" id="pref-key-input" class="input-field" placeholder="Key (e.g. verbosity)">
+            <input type="text" id="pref-val-input" class="input-field" placeholder="Value (e.g. concise)">
+            <input type="text" id="pref-cat-input" class="input-field" placeholder="Category" value="general" style="max-width: 100px;">
+            <button id="add-pref-btn" class="btn-primary">Save Preference</button>
+          </div>
+          <div style="overflow-x: auto; background: rgba(0, 0, 0, 0.2); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>Value</th>
+                  <th>Category</th>
+                  <th style="text-align: right;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="prefs-table-body">
+                <tr><td colspan="4" class="empty-state">Loading preferences...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Model-Inferred Facts -->
+        <div class="memory-subpanel">
+          <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-primary);">
+            Model-Inferred Observations &amp; Facts
+          </h3>
+          <div id="facts-list" style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="empty-state">Loading inferred facts...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Static Local Dashboard Script -->
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

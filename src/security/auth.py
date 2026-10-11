@@ -10,6 +10,9 @@ logger = logging.getLogger("iris.security.auth")
 
 # Public endpoint paths that bypass authentication
 PUBLIC_PATHS: Set[str] = {
+    "/",
+    "/dashboard",
+    "/api/dashboard/status",
     "/health",
     "/health/live",
     "/health/ready",
@@ -83,7 +86,12 @@ async def verify_api_key(
     FastAPI dependency that enforces API key or Bearer token authentication.
     """
     path = request.url.path
-    if path in PUBLIC_PATHS or path.rstrip("/") in PUBLIC_PATHS:
+    if (
+        path in PUBLIC_PATHS 
+        or path.rstrip("/") in PUBLIC_PATHS
+        or path.startswith("/static")
+        or path.startswith("/dashboard/static")
+    ):
         return "public"
 
     # Extract token from Bearer header, X-API-Key header, or query params
