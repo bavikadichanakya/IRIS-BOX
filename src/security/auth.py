@@ -1,8 +1,10 @@
 import os
 import hmac
+import time
+import hashlib
 import secrets
 import logging
-from typing import Optional, Dict, Set
+from typing import Optional, Dict, Set, Any
 from dotenv import load_dotenv
 load_dotenv()
 from fastapi import Request, HTTPException, status, Security
@@ -53,12 +55,57 @@ class AuthManager:
                 logger.info("No master token configured. Generated secure random token for startup.")
         self.master_key = key
         self.device_tokens: Dict[str, str] = {}  # device_id -> token
+        self._plan_tokens: Dict[str, Dict[str, Any]] = {}  # plan_id -> metadata
 
     def register_device_token(self, device_id: str, token: str):
         self.device_tokens[device_id] = token
 
     def revoke_device_token(self, device_id: str) -> bool:
         return self.device_tokens.pop(device_id, None) is not None
+
+    def create_plan_approval_token(self, plan_id: str, content_hash: str, ttl_sec: float = 300.0) -> str:
+        """
+        Creates a single-use approval token cryptographically bound to plan_id and content_hash.
+        """
+        raw = f"{plan_id}:{content_hash}:{secrets.token_hex(16)}"
+        signature = hmac.new(self.master_key.encode("utf-8"), raw.encode("utf-8"), hashlib.sha256).hexdigest()
+        token = f"pat_{signature[:32]}"
+        self._plan_tokens[plan_id] = {
+            "token": token,
+            "content_hash": content_hash,
+            "expires_at": time.time() + ttl_sec,
+        }
+        logger.info(f"Issued plan approval token for plan '{plan_id}' with digest {content_hash[:8]}...")
+        return token
+
+    def validate_plan_approval_token(self, plan_id: str, content_hash: str, token: Optional[str]) -> bool:
+        """
+        Validates and consumes a plan approval token.
+        Requires exact match for plan_id, content_hash, non-expired TTL, and token value.
+        """
+        if not token or not token.strip():
+            logger.warning(f"Plan approval token validation rejected: empty token for plan '{plan_id}'")
+            return False
+        clean_token = token.strip()
+        record = self._plan_tokens.get(plan_id)
+        if not record:
+            logger.warning(f"Plan approval token validation rejected: no active token record for plan '{plan_id}'")
+            return False
+        if time.time() > record["expires_at"]:
+            self._plan_tokens.pop(plan_id, None)
+            logger.warning(f"Plan approval token validation rejected: token expired for plan '{plan_id}'")
+            return False
+        if not hmac.compare_digest(record["content_hash"], content_hash):
+            logger.warning(f"Plan approval token validation rejected: content_hash mismatch for plan '{plan_id}'")
+            return False
+        if not hmac.compare_digest(record["token"], clean_token):
+            logger.warning(f"Plan approval token validation rejected: token mismatch for plan '{plan_id}'")
+            return False
+
+        # Consumed on successful validation (single-use)
+        self._plan_tokens.pop(plan_id, None)
+        logger.info(f"Plan approval token successfully validated and consumed for plan '{plan_id}'")
+        return True
 
     def validate_token(self, token: Optional[str], device_id: Optional[str] = None) -> bool:
         if not token:

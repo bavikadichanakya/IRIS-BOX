@@ -39,8 +39,12 @@ def validate_audio_header(audio_bytes: bytes, expected_sample_rate: int = 16000)
 
         data_offset = audio_bytes.find(b"data")
         if data_offset != -1 and len(audio_bytes) >= data_offset + 8:
-            return audio_bytes[data_offset + 8:]
-        return audio_bytes[44:]
+            payload = audio_bytes[data_offset + 8:]
+        else:
+            payload = audio_bytes[44:]
+        if len(payload) % 2 != 0:
+            payload = payload[:len(payload) - 1]
+        return payload
 
     if len(audio_bytes) % 2 != 0:
         raise ValueError("Audio byte length must be a multiple of 2 for 16-bit PCM")

@@ -4,7 +4,7 @@ import logging
 import time
 from typing import Dict, Any, Optional, Union, Type
 from src.tools.capability import Capability, ToolResult, ExecutionStatus, PermissionLevel
-from src.tools.permissions import PermissionManager
+from src.tools.permissions import PermissionManager, permission_manager as default_permission_manager
 from src.tools.registry import ToolRegistry
 from src.observability.event_bus import EventBus
 from src.observability.tracing import TraceContext
@@ -27,7 +27,7 @@ class ToolManager:
     ):
         reg = registry or ToolRegistry
         self.registry = reg() if inspect.isclass(reg) else reg
-        self.permission_manager = permission_manager or PermissionManager()
+        self.permission_manager = permission_manager or default_permission_manager
         self.event_bus = event_bus or EventBus()
         self.skill_registry = skill_registry
         self.voice_auth = voice_auth

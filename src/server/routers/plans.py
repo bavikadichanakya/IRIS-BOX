@@ -78,7 +78,7 @@ async def approve_plan(
             detail=f"Plan '{plan_id}' not found.",
         )
 
-    token = payload.token if payload else None
+    token = (payload.token if payload else None) or request.query_params.get("token") or request.headers.get("X-Plan-Token")
     approved = pm.approve_plan(plan_id, token=token)
     if not approved:
         raise HTTPException(

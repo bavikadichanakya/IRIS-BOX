@@ -85,8 +85,8 @@ async def test_plan_staging_and_ttl_expiration():
     assert expired_plan.status == PlanStatus.EXPIRED
     assert expired_plan.steps[0].status == StepStatus.CANCELLED
 
-    # Approval should be rejected for expired plans
-    approved = pm.approve_plan(plan.plan_id)
+    # Approval should be rejected for expired plans even with valid token
+    approved = pm.approve_plan(plan.plan_id, token=plan.approval_token)
     assert approved is False
 
 
@@ -170,9 +170,11 @@ async def test_successful_approval_and_ordered_sequential_execution(plan_manager
 
     plan = plan_manager.create_plan(summary="Ordered Execution", steps=steps)
     assert plan.status == PlanStatus.STAGED
+    assert plan.content_hash != ""
+    assert plan.approval_token is not None
 
-    # Approve
-    approved = plan_manager.approve_plan(plan.plan_id)
+    # Approve with cryptographic token
+    approved = plan_manager.approve_plan(plan.plan_id, token=plan.approval_token)
     assert approved is True
     assert plan.status == PlanStatus.APPROVED
 
@@ -217,7 +219,7 @@ async def test_immediate_execution_halt_on_intermediate_failure(plan_manager, mo
     ]
 
     plan = plan_manager.create_plan(summary="Failure Halt Plan", steps=steps)
-    plan_manager.approve_plan(plan.plan_id)
+    plan_manager.approve_plan(plan.plan_id, token=plan.approval_token)
 
     executed = await plan_manager.execute_approved_plan(plan.plan_id, orchestrator=mock_tool_manager)
 
@@ -251,8 +253,8 @@ async def test_rejection_workflow_prevents_execution(plan_manager, mock_tool_man
     assert plan.status == PlanStatus.REJECTED
     assert plan.steps[0].status == StepStatus.CANCELLED
 
-    # Cannot approve a rejected plan
-    assert plan_manager.approve_plan(plan.plan_id) is False
+    # Cannot approve a rejected plan even with token
+    assert plan_manager.approve_plan(plan.plan_id, token=plan.approval_token) is False
 
     # Execution should fail immediately
     with pytest.raises(RuntimeError) as exc_info:
@@ -288,9 +290,11 @@ async def test_orchestrator_multi_action_plan_preview():
     staged = orchestrator.plan_manager.get_plan(plan_id)
     assert staged is not None
     assert staged.status == PlanStatus.STAGED
+    assert staged.approval_token is not None
 
-    # Approve and execute via Orchestrator
-    orchestrator.plan_manager.approve_plan(plan_id)
+    # Approve and execute via Orchestrator with approval token
+    approved = orchestrator.plan_manager.approve_plan(plan_id, token=staged.approval_token)
+    assert approved is True
     exec_result = await orchestrator.execute_plan(plan_id)
     assert exec_result.status == "COMPLETED"
     assert exec_result.output_payload["status"] == "COMPLETED"
@@ -350,17 +354,81 @@ def test_plans_rest_api_security_and_endpoints():
     assert reject_res.json()["status"] == "REJECTED"
 
     # Cannot approve rejected plan -> HTTP 400
-    re_approve_res = client.post(f"/api/plans/{plan_to_reject.plan_id}/approve", headers=headers)
+    re_approve_res = client.post(
+        f"/api/plans/{plan_to_reject.plan_id}/approve",
+        json={"token": plan_to_reject.approval_token},
+        headers=headers
+    )
     assert re_approve_res.status_code == 400
 
-    # 3. Authenticated Approval & Execution Flow
+    # 3. Authenticated Approval & Execution Flow with valid token
     plan_to_approve = pm.create_plan(
         summary="API Approve Test",
         steps=[PlanStep(step_id=1, tool_name="SystemCommandTool", parameters={"command": "echo api_ok", "action_type": "terminal"}, description="Run echo")]
     )
-    approve_res = client.post(f"/api/plans/{plan_to_approve.plan_id}/approve", headers=headers)
+    approve_res = client.post(
+        f"/api/plans/{plan_to_approve.plan_id}/approve",
+        json={"token": plan_to_approve.approval_token},
+        headers=headers
+    )
     assert approve_res.status_code == 200
     approve_data = approve_res.json()
     assert approve_data["plan_id"] == plan_to_approve.plan_id
     assert approve_data["status"] == "COMPLETED"
     assert approve_data["steps"][0]["status"] == "COMPLETED"
+
+
+def test_cryptographic_plan_approval_rejects_missing_or_empty_token(plan_manager):
+    """Verify approve_plan rejects missing or empty tokens."""
+    plan = plan_manager.create_plan(
+        summary="Token Validation Test",
+        steps=[PlanStep(step_id=1, tool_name="SystemCommandTool", description="Test")]
+    )
+    # Missing token (None)
+    assert plan_manager.approve_plan(plan.plan_id, token=None) is False
+    assert plan.status == PlanStatus.STAGED
+
+    # Empty token ("")
+    assert plan_manager.approve_plan(plan.plan_id, token="") is False
+    assert plan.status == PlanStatus.STAGED
+
+    # Whitespace token ("   ")
+    assert plan_manager.approve_plan(plan.plan_id, token="   ") is False
+    assert plan.status == PlanStatus.STAGED
+
+
+def test_cryptographic_plan_approval_rejects_invalid_and_mismatched_token(plan_manager):
+    """Verify approve_plan rejects invalid tokens or tokens issued for other plans."""
+    plan_a = plan_manager.create_plan(
+        summary="Plan A",
+        steps=[PlanStep(step_id=1, tool_name="SystemCommandTool", description="Action A")]
+    )
+    plan_b = plan_manager.create_plan(
+        summary="Plan B",
+        steps=[PlanStep(step_id=1, tool_name="SystemCommandTool", description="Action B")]
+    )
+
+    # Random forged token
+    assert plan_manager.approve_plan(plan_a.plan_id, token="pat_invalid_forged_signature_12345") is False
+
+    # Cross-plan token injection (using plan_b's token on plan_a)
+    assert plan_manager.approve_plan(plan_a.plan_id, token=plan_b.approval_token) is False
+    assert plan_a.status == PlanStatus.STAGED
+
+
+def test_cryptographic_plan_approval_rejects_tampered_plan_digest(plan_manager):
+    """Verify token validation fails if plan steps are altered after token issuance."""
+    plan = plan_manager.create_plan(
+        summary="Tamper Test",
+        steps=[PlanStep(step_id=1, tool_name="SystemCommandTool", parameters={"command": "echo safe"}, description="Step 1")]
+    )
+    valid_token = plan.approval_token
+
+    # Maliciously alter step parameters on staged plan
+    plan.steps[0].parameters = {"command": "rm -rf /"}
+    plan.content_hash = plan_manager.calculate_content_hash(plan.plan_id, plan.steps)
+
+    # Token was issued for the original content_hash, so validating against new digest must fail
+    assert plan_manager.approve_plan(plan.plan_id, token=valid_token) is False
+    assert plan.status == PlanStatus.STAGED
+

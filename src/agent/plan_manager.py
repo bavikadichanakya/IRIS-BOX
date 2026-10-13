@@ -2,6 +2,8 @@ import asyncio
 import logging
 import time
 import uuid
+import json
+import hashlib
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -50,6 +52,8 @@ class ExecutionPlan(BaseModel):
     summary: str
     steps: List[PlanStep] = Field(default_factory=list)
     status: PlanStatus = PlanStatus.STAGED
+    content_hash: str = Field(default="", description="Cryptographic SHA256 digest of canonical plan structure")
+    approval_token: Optional[str] = Field(default=None, description="Single-use approval token bound to content_hash")
     created_at: float = Field(default_factory=time.time)
     expires_at: float = Field(default_factory=lambda: time.time() + 300.0)  # default 5 minutes TTL
 
@@ -64,6 +68,28 @@ class PlanManager:
         self._plans: Dict[str, ExecutionPlan] = {}
         self.default_ttl_sec = default_ttl_sec
 
+    def calculate_content_hash(self, plan_id: str, steps: List[PlanStep]) -> str:
+        """
+        Computes a deterministic SHA256 digest of the canonical plan payload
+        (plan_id + ordered step definitions + parameters).
+        """
+        canonical_steps = [
+            {
+                "step_id": s.step_id,
+                "tool_name": s.tool_name,
+                "action_type": s.action_type,
+                "parameters": s.parameters,
+                "permission_level": s.permission_level.value if hasattr(s.permission_level, "value") else str(s.permission_level),
+            }
+            for s in sorted(steps, key=lambda x: x.step_id)
+        ]
+        canonical_payload = {
+            "plan_id": plan_id,
+            "steps": canonical_steps,
+        }
+        canonical_bytes = json.dumps(canonical_payload, sort_keys=True, default=str).encode("utf-8")
+        return hashlib.sha256(canonical_bytes).hexdigest()
+
     def create_plan(
         self,
         session_id: str = "default-session",
@@ -72,7 +98,7 @@ class PlanManager:
         steps: Optional[List[Union[PlanStep, Dict[str, Any]]]] = None,
         ttl_sec: Optional[float] = None,
     ) -> ExecutionPlan:
-        """Create and stage a new ExecutionPlan."""
+        """Create, cryptographically digest, and stage a new ExecutionPlan."""
         plan_id = f"plan_{uuid.uuid4().hex[:12]}"
         now = time.time()
         ttl = ttl_sec if ttl_sec is not None else self.default_ttl_sec
@@ -89,7 +115,19 @@ class PlanManager:
                 step_obj = PlanStep(**step_data)
             else:
                 raise TypeError(f"Invalid step type: {type(s)}")
+            if step_obj.permission_level == PermissionLevel.PUBLIC:
+                name = step_obj.tool_name
+                if "System" in name or "Terminal" in name or "Shell" in name or "Bash" in name or "PowerShell" in name:
+                    step_obj.permission_level = PermissionLevel.SENSITIVE
+                elif "Home" in name or "Assistant" in name or "Device" in name:
+                    step_obj.permission_level = PermissionLevel.PROTECTED
             parsed_steps.append(step_obj)
+
+        content_hash = self.calculate_content_hash(plan_id, parsed_steps)
+
+        # Cryptographically issue single-use plan approval token bound to plan_id and content_hash
+        from src.security.auth import auth_manager
+        approval_token = auth_manager.create_plan_approval_token(plan_id, content_hash, ttl_sec=ttl)
 
         plan = ExecutionPlan(
             plan_id=plan_id,
@@ -98,11 +136,13 @@ class PlanManager:
             summary=summary,
             steps=parsed_steps,
             status=PlanStatus.STAGED,
+            content_hash=content_hash,
+            approval_token=approval_token,
             created_at=now,
             expires_at=expires_at,
         )
         self._plans[plan_id] = plan
-        logger.info(f"Staged execution plan '{plan_id}' with {len(parsed_steps)} steps. TTL={ttl}s")
+        logger.info(f"Staged execution plan '{plan_id}' with {len(parsed_steps)} steps. Hash={content_hash[:8]}... TTL={ttl}s")
         return plan
 
     def get_plan(self, plan_id: str) -> Optional[ExecutionPlan]:
@@ -122,11 +162,14 @@ class PlanManager:
 
     def approve_plan(self, plan_id: str, token: Optional[str] = None) -> bool:
         """
-        Approve a staged plan for execution.
-        Returns False if plan does not exist, is expired, or is not in STAGED status.
+        Cryptographically approve a staged plan for execution.
+        Requires a non-empty token that binds to the plan digest.
+        Returns False if plan does not exist, is expired, not in STAGED status,
+        or if token is missing, expired, or mismatched.
         """
         plan = self.get_plan(plan_id)
         if not plan:
+            logger.warning(f"Cannot approve non-existent plan '{plan_id}'")
             return False
 
         if plan.status != PlanStatus.STAGED:
@@ -135,10 +178,20 @@ class PlanManager:
 
         if time.time() > plan.expires_at:
             plan.status = PlanStatus.EXPIRED
+            logger.warning(f"Cannot approve expired plan '{plan_id}'")
+            return False
+
+        if not token or not token.strip():
+            logger.warning(f"Cannot approve plan '{plan_id}': token is missing or empty.")
+            return False
+
+        from src.security.auth import auth_manager
+        if not auth_manager.validate_plan_approval_token(plan_id, plan.content_hash, token.strip()):
+            logger.warning(f"Cryptographic token validation failed for plan '{plan_id}' approval.")
             return False
 
         plan.status = PlanStatus.APPROVED
-        logger.info(f"Execution plan '{plan_id}' approved.")
+        logger.info(f"Execution plan '{plan_id}' approved with verified cryptographic token.")
         return True
 
     def reject_plan(self, plan_id: str, reason: Optional[str] = None) -> bool:
@@ -194,12 +247,35 @@ class PlanManager:
             if step.tool_name == "SystemCommandTool" and "action_type" not in step_args:
                 step_args["action_type"] = step.action_type or "terminal"
 
+            # Per-step explicit authorization ticket for sensitive actions
+            step_ticket = None
+            is_sensitive = (step.permission_level == PermissionLevel.SENSITIVE)
+            if not is_sensitive and hasattr(tool_manager, "get_capability"):
+                cap = tool_manager.get_capability(step.tool_name)
+                if cap and cap.permission_level == PermissionLevel.SENSITIVE:
+                    is_sensitive = True
+            elif not is_sensitive:
+                name = step.tool_name
+                if "System" in name or "Terminal" in name or "Shell" in name or "Bash" in name:
+                    is_sensitive = True
+
+            if is_sensitive:
+                perm_mgr = getattr(tool_manager, "permission_manager", None)
+                if not perm_mgr:
+                    from src.tools.permissions import permission_manager as perm_mgr
+                step_ticket = perm_mgr.issue_step_ticket(
+                    plan_id=plan.plan_id,
+                    step_id=step.step_id,
+                    tool_name=step.tool_name,
+                    parameters=step_args,
+                )
+
             context = {
                 "session_id": plan.session_id,
                 "device_id": plan.device_id or "default-device",
                 "device_type": "pod",
-                "confirmed": True,  # Approved plan explicitly confirms steps
                 "action_payload": step_args,
+                "step_ticket": step_ticket,
             }
 
             try:
