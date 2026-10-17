@@ -133,3 +133,50 @@ async def reject_plan(
         "reason": reason,
         "plan": updated_plan.model_dump() if updated_plan else None,
     }
+
+
+@router.post("/{plan_id}/rollback")
+async def rollback_plan(plan_id: str, request: Request):
+    """
+    Rollback a plan by reverting to its safety checkpoint if available.
+    """
+    pm = get_plan_manager(request)
+    plan = pm.get_plan(plan_id)
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Plan '{plan_id}' not found.",
+        )
+
+    checkpoint_id = plan.checkpoint_id or (plan.metadata.get("checkpoint_id") if plan.metadata else None)
+    project_path = plan.project_path or (plan.metadata.get("project_path") if plan.metadata else None)
+
+    if not checkpoint_id or not project_path:
+        for step in plan.steps:
+            if step.result and isinstance(step.result.get("output"), dict) and "checkpoint_id" in step.result["output"]:
+                checkpoint_id = step.result["output"]["checkpoint_id"]
+                project_path = step.result["output"].get("project_path", project_path)
+                break
+
+    if not checkpoint_id or not project_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Plan '{plan_id}' does not have an associated safety checkpoint.",
+        )
+
+    from src.operator.workspace import ProjectWorkspace
+    success = ProjectWorkspace.revert_checkpoint(project_path, checkpoint_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to revert checkpoint '{checkpoint_id}'.",
+        )
+
+    return {
+        "status": "ROLLED_BACK",
+        "plan_id": plan_id,
+        "checkpoint_id": checkpoint_id,
+        "project_path": project_path,
+        "message": f"Successfully reverted to checkpoint '{checkpoint_id}'.",
+    }
+

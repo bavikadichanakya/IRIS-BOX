@@ -41,7 +41,7 @@ class ToolManager:
         schemas = self.registry.get_schemas()
         for s in schemas:
             name = s["name"]
-            if "System" in name or "Terminal" in name or "Shell" in name:
+            if "System" in name or "Terminal" in name or "Shell" in name or "Operator" in name or "Patch" in name:
                 perm = PermissionLevel.SENSITIVE
                 requires_conf = True
             elif "Home" in name or "Assistant" in name or "Device" in name:
@@ -204,6 +204,26 @@ class ToolManager:
                     timeout=capability.execution_timeout_sec
                 )
             duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+            if hasattr(output, "success") and output.success is False:
+                error_msg = getattr(output, "error", None) or "Tool execution failed"
+                await self.event_bus.publish("tool.failed", {
+                    "tool_name": name,
+                    "status": ExecutionStatus.FAILED.value,
+                    "duration_ms": duration_ms,
+                    "error": error_msg,
+                    "context": ctx_data
+                }, trace=trace_ctx)
+                return ToolResult(
+                    status=ExecutionStatus.FAILED,
+                    tool_name=name,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    output=output,
+                    error=error_msg,
+                    duration_ms=duration_ms
+                )
+
             await self.event_bus.publish("tool.execution.succeeded", {"tool": name, "duration_ms": duration_ms}, trace=trace_ctx)
             await self.event_bus.publish("tool.completed", {
                 "tool_name": name,

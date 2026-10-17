@@ -382,6 +382,13 @@ function handleTextMessage(dataStr) {
             appendTranscript('assistant', payload.text || payload.content);
         } else if (type === 'proactive_announcement') {
             appendTranscript('system', `[Announcement] ${payload.text}`);
+        } else if (type === 'tool_status') {
+            if (payload.status === 'INVOKING') {
+                console.log(`[Tool] Invoking ${payload.tool_name}`);
+            } else if (payload.status === 'FAILED' || payload.status === 'DENIED') {
+                appendTranscript('system', `Tool ${payload.tool_name} failed: ${payload.error || 'Execution error'}`);
+            }
+            // For status === 'COMPLETED', orchestrator already streams the response tokens into the transcript
         }
     } catch {
         // Plain text response fallback
@@ -611,7 +618,13 @@ function updateNotificationCount(count) {
 let activeAssistantParagraph = null;
 
 function appendTranscript(sender, text) {
-    if (!transcriptBox) return;
+    if (!transcriptBox || !text) return;
+
+    // Deduplication check: ignore identical consecutive message from same sender
+    const lastMsg = transcriptBox.lastElementChild;
+    if (lastMsg && lastMsg.classList.contains(sender) && lastMsg.textContent.trim() === String(text).trim()) {
+        return;
+    }
 
     activeAssistantParagraph = null;
     const msgDiv = document.createElement('div');

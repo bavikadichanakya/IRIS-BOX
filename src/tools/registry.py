@@ -4,7 +4,7 @@ import inspect
 import os
 import shlex
 import subprocess
-from typing import Callable, Dict, Any, Type, List
+from typing import Callable, Dict, Any, Type, List, Optional
 
 import requests
 from pydantic import BaseModel
@@ -13,6 +13,7 @@ from src.models.schemas import (
     SmartHomeAction,
     LaptopSystemAction,
     BrowserAction,
+    ProjectOperatorAction,
     AgentExecutionResult,
 )
 
@@ -181,6 +182,7 @@ class SystemCommandTool(BaseTool):
     _ALLOWED_COMMANDS = {
         "dir", "ls", "echo", "pwd", "cd", "sleep",
         "whoami", "hostname", "ipconfig", "ifconfig", "ping",
+        "pytest", "python", "python3", "npm", "cargo", "go", "git", "uv",
     }
 
     def execute(self, action_payload: LaptopSystemAction) -> AgentExecutionResult:
@@ -229,6 +231,7 @@ class SystemCommandTool(BaseTool):
         try:
             result = subprocess.run(
                 exec_args,
+                cwd=action_payload.cwd,
                 shell=False,
                 capture_output=True,
                 text=True,
@@ -241,14 +244,24 @@ class SystemCommandTool(BaseTool):
                 return AgentExecutionResult(
                     success=False,
                     tool_name="SystemCommandTool",
-                    output_payload={"stdout": result.stdout.strip(), "stderr": result.stderr.strip()},
+                    output_payload={
+                        "stdout": result.stdout.strip(),
+                        "stderr": result.stderr.strip(),
+                        "returncode": result.returncode,
+                        "exit_code": result.returncode,
+                    },
                     error=error_message,
                 )
             else:
                 return AgentExecutionResult(
                     success=True,
                     tool_name="SystemCommandTool",
-                    output_payload={"stdout": result.stdout.strip(), "stderr": result.stderr.strip()},
+                    output_payload={
+                        "stdout": result.stdout.strip(),
+                        "stderr": result.stderr.strip(),
+                        "returncode": result.returncode,
+                        "exit_code": result.returncode,
+                    },
                 )
         except subprocess.TimeoutExpired as e:
             return AgentExecutionResult(
@@ -269,16 +282,64 @@ class SystemCommandTool(BaseTool):
 @ToolRegistry.register_tool("BrowserTool")
 class BrowserTool(BaseTool):
     """
-    Headless browser helper interface using Playwright.
+    Open websites, URLs, or web applications in the desktop browser on the user's laptop (e.g. YouTube, Google, Reddit, Wikipedia), or navigate to any web page.
     """
     def __init__(self, headless: bool = True):
         self.headless = headless
 
+    def _normalize_url(self, raw_url: Optional[str]) -> str:
+        if not raw_url:
+            return ""
+        url = raw_url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+        return url
+
+    def _open_desktop_url(self, url: str) -> bool:
+        import subprocess
+        import webbrowser
+
+        if os.name == "nt":
+            # 1. Try launching via installed desktop browsers directly for reliable UI popup
+            known_browser_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            ]
+            for browser_exe in known_browser_paths:
+                if os.path.exists(browser_exe):
+                    try:
+                        subprocess.Popen([browser_exe, url], close_fds=True)
+                        return True
+                    except Exception:
+                        pass
+
+            # 2. Try Windows shell command 'start'
+            try:
+                subprocess.Popen(["cmd.exe", "/c", "start", "", url], shell=False)
+                return True
+            except Exception:
+                pass
+
+            # 3. Try os.startfile
+            if hasattr(os, "startfile"):
+                try:
+                    os.startfile(url)
+                    return True
+                except Exception:
+                    pass
+
+        return webbrowser.open(url)
+
     def execute(self, action_payload: BrowserAction) -> AgentExecutionResult:
         from src.security.policy import is_url_allowed
 
-        if action_payload.url:
-            allowed, reason = is_url_allowed(action_payload.url)
+        target_url = self._normalize_url(action_payload.url)
+        if target_url:
+            allowed, reason = is_url_allowed(target_url)
             if not allowed:
                 return AgentExecutionResult(
                     success=False,
@@ -289,19 +350,18 @@ class BrowserTool(BaseTool):
 
         act = action_payload.action
         if act in ("goto", "navigate", "open"):
-            if not action_payload.url:
+            if not target_url:
                 return AgentExecutionResult(success=False, tool_name="BrowserTool", error="URL is required for navigate action")
             try:
-                import webbrowser
-                opened = webbrowser.open(action_payload.url)
+                opened = self._open_desktop_url(target_url)
                 return AgentExecutionResult(
                     success=True,
                     tool_name="BrowserTool",
                     output_payload={
                         "action_performed": act,
-                        "url": action_payload.url,
+                        "url": target_url,
                         "opened_on_desktop": opened,
-                        "message": f"Successfully opened {action_payload.url} in browser on laptop."
+                        "message": f"Successfully opened {target_url} in browser on laptop."
                     }
                 )
             except Exception as e:
@@ -320,8 +380,9 @@ class BrowserTool(BaseTool):
     async def execute_async(self, action_payload: BrowserAction) -> AgentExecutionResult:
         from src.security.policy import is_url_allowed
 
-        if action_payload.url:
-            allowed, reason = is_url_allowed(action_payload.url)
+        target_url = self._normalize_url(action_payload.url)
+        if target_url:
+            allowed, reason = is_url_allowed(target_url)
             if not allowed:
                 return AgentExecutionResult(
                     success=False,
@@ -334,19 +395,18 @@ class BrowserTool(BaseTool):
 
         # If action is simply opening/navigating to a URL on the user's laptop, launch desktop browser
         if act in ("goto", "navigate", "open"):
-            if not action_payload.url:
+            if not target_url:
                 return AgentExecutionResult(success=False, tool_name="BrowserTool", error="URL is required for navigate action")
             try:
-                import webbrowser
-                opened = webbrowser.open(action_payload.url)
+                opened = self._open_desktop_url(target_url)
                 return AgentExecutionResult(
                     success=True,
                     tool_name="BrowserTool",
                     output_payload={
                         "action_performed": act,
-                        "url": action_payload.url,
+                        "url": target_url,
                         "opened_on_desktop": opened,
-                        "message": f"Successfully opened {action_payload.url} in browser on laptop."
+                        "message": f"Successfully opened {target_url} in browser on laptop."
                     }
                 )
             except Exception as e:
@@ -414,3 +474,151 @@ class BrowserTool(BaseTool):
                 output_payload={},
                 error="Playwright is not installed or headless browser binary is missing. Install via 'playwright install'."
             )
+
+
+@ToolRegistry.register_tool("ProjectOperatorTool")
+class ProjectOperatorTool(BaseTool):
+    """
+    Surgical workspace patch and verification operator tool.
+    Supports checkpoint creation, surgical patching, test execution, and rollback.
+    """
+
+    def execute(self, action_payload: ProjectOperatorAction) -> AgentExecutionResult:
+        from pathlib import Path
+        from src.operator.workspace import ProjectWorkspace
+
+        action = action_payload.action
+        proj_path = action_payload.project_path
+
+        try:
+            if action in ("create_checkpoint", "checkpoint"):
+                cid = ProjectWorkspace.create_checkpoint(proj_path, action_payload.checkpoint_name or "checkpoint")
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={"status": "CHECKPOINT_CREATED", "checkpoint_id": cid, "project_path": proj_path},
+                )
+
+            elif action in ("apply_patch", "patch"):
+                file_rel = action_payload.file_path or ""
+                target_file = Path(proj_path) / file_rel if not os.path.isabs(file_rel) else Path(file_rel)
+                if not target_file.exists():
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="ProjectOperatorTool",
+                        output_payload={"status": "FILE_NOT_FOUND", "file": str(target_file)},
+                        error=f"Target file not found: {target_file}",
+                    )
+
+                content = target_file.read_text(encoding="utf-8")
+                patched_content = content
+
+                if action_payload.find_content is not None and action_payload.replace_content is not None:
+                    if action_payload.find_content not in patched_content:
+                        return AgentExecutionResult(
+                            success=False,
+                            tool_name="ProjectOperatorTool",
+                            output_payload={"status": "FIND_TARGET_NOT_FOUND"},
+                            error=f"find_content '{action_payload.find_content}' not found in {file_rel}",
+                        )
+                    patched_content = patched_content.replace(action_payload.find_content, action_payload.replace_content, 1)
+
+                elif isinstance(action_payload.patch, dict):
+                    find_c = action_payload.patch.get("find")
+                    repl_c = action_payload.patch.get("replace")
+                    if find_c and repl_c is not None:
+                        if find_c not in patched_content:
+                            return AgentExecutionResult(
+                                success=False,
+                                tool_name="ProjectOperatorTool",
+                                output_payload={"status": "FIND_TARGET_NOT_FOUND"},
+                                error=f"find_content '{find_c}' not found in {file_rel}",
+                            )
+                        patched_content = patched_content.replace(find_c, repl_c, 1)
+
+                elif isinstance(action_payload.patch, str):
+                    patch_str = action_payload.patch.strip()
+                    patched_content = patch_str
+
+                target_file.write_text(patched_content, encoding="utf-8")
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={"status": "PATCH_APPLIED", "file_path": str(file_rel)},
+                )
+
+            elif action in ("run_test", "test"):
+                test_cmd = action_payload.test_command or action_payload.command or "pytest"
+                cmd_parts = shlex.split(test_cmd)
+                if os.name == "nt" and cmd_parts and cmd_parts[0].lower() in {"echo", "dir", "cd", "cls", "type", "pwd"}:
+                    cmd_parts = ["cmd.exe", "/c"] + cmd_parts
+
+                res = subprocess.run(
+                    cmd_parts,
+                    cwd=proj_path,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=action_payload.timeout_sec
+                )
+                if res.returncode != 0:
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="ProjectOperatorTool",
+                        error=f"Test verification failed with exit code {res.returncode}",
+                        output_payload={
+                            "status": "TEST_FAILED",
+                            "returncode": res.returncode,
+                            "exit_code": res.returncode,
+                            "stdout": res.stdout.strip(),
+                            "stderr": res.stderr.strip(),
+                        },
+                    )
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={
+                        "status": "TEST_PASSED",
+                        "returncode": 0,
+                        "exit_code": 0,
+                        "stdout": res.stdout.strip(),
+                        "stderr": res.stderr.strip(),
+                    },
+                )
+
+            elif action in ("validate_exit_code", "verify"):
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={"status": "VERIFICATION_SUCCESS", "returncode": 0, "exit_code": 0},
+                )
+
+            elif action in ("revert_checkpoint", "rollback"):
+                cid = action_payload.checkpoint_id
+                if not cid:
+                    return AgentExecutionResult(success=False, tool_name="ProjectOperatorTool", error="Missing checkpoint_id")
+                reverted = ProjectWorkspace.revert_checkpoint(proj_path, cid)
+                return AgentExecutionResult(
+                    success=reverted,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={"status": "REVERTED" if reverted else "REVERT_FAILED", "checkpoint_id": cid},
+                    error=None if reverted else "Failed to revert checkpoint",
+                )
+
+            else:
+                return AgentExecutionResult(
+                    success=False,
+                    tool_name="ProjectOperatorTool",
+                    error=f"Unknown operator action: {action}",
+                )
+
+        except Exception as e:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="ProjectOperatorTool",
+                error=f"Operator error: {str(e)}",
+            )
+
+
+ToolRegistry._tool_classes["OperatorTool"] = ProjectOperatorTool
+

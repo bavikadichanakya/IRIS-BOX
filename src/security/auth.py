@@ -57,6 +57,10 @@ class AuthManager:
         self.device_tokens: Dict[str, str] = {}  # device_id -> token
         self._plan_tokens: Dict[str, Dict[str, Any]] = {}  # plan_id -> metadata
 
+    def get_master_key(self) -> str:
+        """Return the active master key."""
+        return self.master_key
+
     def register_device_token(self, device_id: str, token: str):
         self.device_tokens[device_id] = token
 

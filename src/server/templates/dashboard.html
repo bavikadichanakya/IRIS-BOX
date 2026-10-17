@@ -136,7 +136,53 @@
       </div>
     </section>
 
-    <!-- 3. Interactive Approval Center -->
+    <!-- 3. AI Project Operator -->
+    <section class="card-panel">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--cyan-neon)" stroke-width="2">
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+          AI Project Operator
+        </h2>
+        <span class="section-badge" id="operator-status-badge">Offline Code Repair</span>
+      </div>
+
+      <div class="operator-input-row">
+        <input type="text" id="operator-project-path" class="input-field" placeholder="Target Repository Path (e.g. C:\projects\my-app)...">
+        <input type="text" id="operator-test-command" class="input-field" placeholder="Test Command (e.g. pytest, npm test - optional)" style="max-width: 280px;">
+        <button id="operator-diagnose-btn" class="btn-primary" style="background: linear-gradient(135deg, var(--cyan-neon), var(--indigo-neon)); display: inline-flex; align-items: center; gap: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          Diagnose &amp; Plan Fix
+        </button>
+        <button id="operator-snapshot-btn" class="btn-primary" style="background: rgba(255, 255, 255, 0.1); border: 1px solid var(--border-subtle); display: inline-flex; align-items: center; gap: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          Inspect
+        </button>
+      </div>
+
+      <div id="operator-intel-container" style="display: none; margin-bottom: 14px;">
+        <div class="operator-info-badges" id="operator-info-pills"></div>
+      </div>
+
+      <div id="operator-diagnostic-container" style="display: none;">
+        <div class="diff-preview-container">
+          <div class="diff-header">
+            <span>Diagnostic Output &amp; Trace</span>
+            <span id="diagnostic-summary-badge" class="badge-fail">FAIL</span>
+          </div>
+          <div class="diff-content" id="diagnostic-output-text" style="color: #cbd5e1; padding: 10px 14px; font-size: 0.76rem; max-height: 200px; overflow-y: auto;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Interactive Approval Center -->
     <section class="card-panel">
       <div class="section-header">
         <h2 class="section-title">

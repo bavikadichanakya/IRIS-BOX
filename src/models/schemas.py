@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional, Any
+from typing import Dict, Literal, Optional, Any, Union
 
 from pydantic import BaseModel, Field
 
@@ -18,8 +18,9 @@ class LaptopSystemAction(BaseModel):
     Schema for a laptop system action.
     """
     command: str
-    action_type: Literal["launch", "file", "terminal"]
+    action_type: Literal["launch", "file", "terminal", "test", "execution"] = "terminal"
     timeout_sec: int = 10
+    cwd: Optional[str] = None
 
 
 class BrowserAction(BaseModel):
@@ -27,10 +28,28 @@ class BrowserAction(BaseModel):
     Schema for a browser action.
     """
     url: str
-    action: Literal["goto", "navigate", "click", "type_text", "extract", "extract_text", "screenshot"]
+    action: Literal["goto", "navigate", "open", "click", "type_text", "extract", "extract_text", "screenshot"]
     selector: Optional[str] = None
     input_text: Optional[str] = None
     timeout_ms: Optional[int] = None
+
+
+class ProjectOperatorAction(BaseModel):
+    """
+    Schema for an AI Project Operator action (checkpoint, patch, test, verification, rollback).
+    """
+    action: str
+    project_path: str
+    checkpoint_name: Optional[str] = "checkpoint"
+    checkpoint_id: Optional[str] = None
+    file_path: Optional[str] = None
+    patch: Optional[Union[str, Dict[str, Any]]] = None
+    diff: Optional[str] = None
+    find_content: Optional[str] = None
+    replace_content: Optional[str] = None
+    test_command: Optional[str] = None
+    command: Optional[str] = None
+    timeout_sec: int = 30
 
 class VoiceCommandPayload(BaseModel):
     """

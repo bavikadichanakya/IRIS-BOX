@@ -15,6 +15,7 @@ logger = logging.getLogger("iris.skills.system_command")
 _ALLOWED_COMMANDS = {
     "dir", "ls", "echo", "pwd", "cd", "sleep",
     "whoami", "hostname", "ipconfig", "ifconfig", "ping",
+    "pytest", "python", "python3", "npm", "cargo", "go", "git", "uv",
 }
 
 
@@ -106,6 +107,7 @@ class SystemCommandSkill(BaseSkill):
                 duration_ms=duration_ms
             )
 
+        cwd = params.get("cwd") or (context.get("cwd") if context else None)
         exec_args = list(command_args)
         if os.name == "nt" and base_command.lower() in {"echo", "dir", "cd", "cls", "type", "pwd"}:
             exec_args = ["cmd.exe", "/c"] + exec_args
@@ -113,6 +115,7 @@ class SystemCommandSkill(BaseSkill):
         try:
             result = subprocess.run(
                 exec_args,
+                cwd=cwd,
                 shell=False,
                 capture_output=True,
                 text=True,
@@ -126,13 +129,22 @@ class SystemCommandSkill(BaseSkill):
                     success=False,
                     skill_name=self.name,
                     error=err_msg,
-                    output={"stdout": result.stdout.strip(), "stderr": result.stderr.strip()},
+                    output={
+                        "stdout": result.stdout.strip(),
+                        "stderr": result.stderr.strip(),
+                        "returncode": result.returncode,
+                        "exit_code": result.returncode,
+                    },
                     duration_ms=duration_ms
                 )
             return SkillExecutionResult(
                 success=True,
                 skill_name=self.name,
-                output={"stdout": result.stdout.strip(), "returncode": result.returncode},
+                output={
+                    "stdout": result.stdout.strip(),
+                    "returncode": result.returncode,
+                    "exit_code": result.returncode,
+                },
                 duration_ms=duration_ms
             )
         except subprocess.TimeoutExpired:

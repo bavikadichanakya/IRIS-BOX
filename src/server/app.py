@@ -4,6 +4,7 @@ import logging
 import re
 import base64
 from typing import Optional, Any, Dict, List
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ from src.audio.tts import TTSEngine
 from src.server.fleet import FleetManager, router as fleet_router
 from src.server.routers.memory import router as memory_router
 from src.server.routers.plans import router as plans_router
+from src.server.routers.operator import router as operator_router
 from src.server.routers.skills import router as skills_router
 from src.server.routers.dashboard import router as dashboard_router
 from src.server.routers.automation import router as automation_router
@@ -209,6 +211,10 @@ app.include_router(memory_router, prefix="/api", dependencies=[Depends(verify_ap
 # Protected Execution Plans API endpoints requiring authentication
 app.include_router(plans_router, dependencies=[Depends(verify_api_key)])
 app.include_router(plans_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
+# Protected Project Operator API endpoints requiring authentication
+app.include_router(operator_router, dependencies=[Depends(verify_api_key)])
+app.include_router(operator_router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
 # Protected Skills & Plugins API endpoints requiring authentication
 app.include_router(skills_router, dependencies=[Depends(verify_api_key)])
@@ -456,7 +462,7 @@ async def realtime_ws_handler(websocket: WebSocket, device_id: Optional[str] = "
                                 request_id=request_id,
                                 speaker=active_speaker
                             ):
-                                if chunk.chunk_type in ("text_delta", "complete") and chunk.delta_text:
+                                if chunk.chunk_type == "text_delta" and chunk.delta_text:
                                     await ws_mgr.send_payload(sess_id, OutboundTokenDeltaPayload(delta=chunk.delta_text, request_id=request_id))
                                     for s in chunker.add_token(chunk.delta_text):
                                         yield s
@@ -526,11 +532,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
                 continue
 
-            try:
-                voice_payload = VoiceCommandPayload(**payload_dict)
-            except Exception as e:
-                await websocket.send_json({"error": f"Invalid payload: {e}"})
+            raw_text = payload_dict.get("text") or payload_dict.get("prompt") or payload_dict.get("raw_transcript")
+            if not raw_text:
+                await websocket.send_json({"error": "Missing 'text' or 'prompt' or 'raw_transcript' field"})
                 continue
+
+            voice_payload = VoiceCommandPayload(
+                raw_transcript=raw_text,
+                confidence=float(payload_dict.get("confidence", 1.0)),
+                timestamp=str(payload_dict.get("timestamp", datetime.now(timezone.utc).isoformat()))
+            )
 
             orchestrator_instance = getattr(websocket.app.state, "orchestrator", None)
             if orchestrator_instance is None:
@@ -539,17 +550,23 @@ async def websocket_endpoint(websocket: WebSocket):
 
             try:
                 result = orchestrator_instance.process_request(voice_payload.raw_transcript)
-                if hasattr(result, "model_dump"):
-                    await websocket.send_json(result.model_dump())
-                else:
-                    await websocket.send_json({"result": str(result)})
+                dump = result.model_dump() if hasattr(result, "model_dump") else {"result": str(result)}
+                out = getattr(result, "output_payload", {}) or {}
+                reply_text = out.get("response") or out.get("message") or (f"Executed {result.tool_name}" if getattr(result, "success", False) and getattr(result, "tool_name", None) else ("Action completed." if getattr(result, "success", False) else (getattr(result, "error", None) or "Execution finished.")))
+                dump["type"] = "assistant_reply"
+                dump["text"] = reply_text
+                await websocket.send_json(dump)
             except Exception as err:
                 error_res = AgentExecutionResult(
                     success=False,
-                    output=f"LLM API call failed: {err}",
-                    execution_time_ms=0
+                    output_payload={"error": str(err)},
+                    tool_name="",
+                    error=f"LLM API call failed: {err}"
                 )
-                await websocket.send_json(error_res.model_dump())
+                dump = error_res.model_dump()
+                dump["type"] = "assistant_reply"
+                dump["text"] = f"Error: {err}"
+                await websocket.send_json(dump)
 
     except WebSocketDisconnect:
         pass

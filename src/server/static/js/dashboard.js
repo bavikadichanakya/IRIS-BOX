@@ -39,6 +39,17 @@
   const addPrefBtn = document.getElementById("add-pref-btn");
   const factsList = document.getElementById("facts-list");
 
+  // Project Operator Elements
+  const operatorProjectPath = document.getElementById("operator-project-path");
+  const operatorTestCommand = document.getElementById("operator-test-command");
+  const operatorDiagnoseBtn = document.getElementById("operator-diagnose-btn");
+  const operatorSnapshotBtn = document.getElementById("operator-snapshot-btn");
+  const operatorIntelContainer = document.getElementById("operator-intel-container");
+  const operatorInfoPills = document.getElementById("operator-info-pills");
+  const operatorDiagnosticContainer = document.getElementById("operator-diagnostic-container");
+  const diagnosticSummaryBadge = document.getElementById("diagnostic-summary-badge");
+  const diagnosticOutputText = document.getElementById("diagnostic-output-text");
+
   // Toast System
   const toastContainer = document.getElementById("toast-container");
 
@@ -180,6 +191,32 @@
     });
   }
 
+  function renderDiffHtml(diffText) {
+    if (!diffText) return "";
+    const lines = diffText.split("\n");
+    const formatted = lines.map(line => {
+      let cls = "info";
+      if (line.startsWith("+") && !line.startsWith("+++")) {
+        cls = "add";
+      } else if (line.startsWith("-") && !line.startsWith("---")) {
+        cls = "del";
+      } else if (line.startsWith("@@")) {
+        cls = "hunk";
+      }
+      return `<div class="diff-line ${cls}">${escapeHtml(line)}</div>`;
+    }).join("");
+
+    return `
+      <div class="diff-preview-container">
+        <div class="diff-header">
+          <span>Unified Diff Preview</span>
+          <span style="color: var(--cyan-neon);">Surgical Patch</span>
+        </div>
+        <div class="diff-content">${formatted}</div>
+      </div>
+    `;
+  }
+
   // 2. Interactive Approval Center
   async function fetchPlans() {
     if (!plansContainer) return;
@@ -210,6 +247,36 @@
           .map((step) => {
             const permClass = (step.permission_level || "public").toLowerCase();
             const paramsStr = JSON.stringify(step.parameters || {});
+
+            let statusBadge = "";
+            if (step.status === "COMPLETED") {
+              statusBadge = `<span class="badge-pass">PASS</span>`;
+            } else if (step.status === "FAILED") {
+              statusBadge = `<span class="badge-fail">FAIL</span>`;
+            } else {
+              statusBadge = `<span class="permission-badge ${permClass}">${step.status || step.permission_level}</span>`;
+            }
+
+            let testLogHtml = "";
+            if (step.result && step.result.output && typeof step.result.output === "object") {
+              const out = step.result.output;
+              const stdout = out.stdout || "";
+              const stderr = out.stderr || "";
+              const exitCode = out.returncode !== undefined ? out.returncode : out.exit_code;
+              if (stdout || stderr || exitCode !== undefined) {
+                const combined = (stdout + "\n" + stderr).trim();
+                const codeColor = (exitCode === 0) ? "var(--emerald-neon)" : "var(--rose-neon)";
+                testLogHtml = `
+                  <div class="test-output-box">
+                    <div style="font-weight: 700; margin-bottom: 4px; color: ${codeColor};">
+                      Execution Verification Output (Exit Code: ${exitCode !== undefined ? exitCode : '0'})
+                    </div>
+                    <div>${escapeHtml(combined || "(Process returned no output)")}</div>
+                  </div>
+                `;
+              }
+            }
+
             return `
               <div class="plan-step-item">
                 <span class="step-num">#${step.step_id}</span>
@@ -218,32 +285,51 @@
                     <strong>[${escapeHtml(step.tool_name)}]</strong> ${escapeHtml(step.description || "")}
                   </div>
                   <div class="step-params">Params: ${escapeHtml(paramsStr)}</div>
+                  ${testLogHtml}
                 </div>
-                <span class="permission-badge ${permClass}">${step.permission_level}</span>
+                ${statusBadge}
               </div>
             `;
           })
           .join("");
 
+        const diffHtml = plan.diff_preview ? renderDiffHtml(plan.diff_preview) : "";
+        const chkId = plan.checkpoint_id || (plan.metadata && plan.metadata.checkpoint_id);
+        const chkBadge = chkId ? `<span class="badge-checkpoint" title="Recovery Checkpoint">Chk: ${escapeHtml(chkId.slice(0, 16))}</span>` : "";
+        const rollbackBtn = chkId ? `
+          <button class="btn-rollback rollback-plan-btn" data-id="${plan.plan_id}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="1 4 1 10 7 10"></polyline>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+            Rollback
+          </button>
+        ` : "";
+
         planCard.innerHTML = `
           <div class="plan-header">
             <div>
-              <span class="plan-id">${escapeHtml(plan.plan_id)}</span>
-              <div class="plan-prompt">${escapeHtml(plan.user_prompt || "Multi-step Task")}</div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="plan-id">${escapeHtml(plan.plan_id)}</span>
+                ${chkBadge}
+              </div>
+              <div class="plan-prompt">${escapeHtml(plan.user_prompt || plan.summary || "Multi-step Task")}</div>
             </div>
-            <span class="status-badge degraded">${plan.status}</span>
+            <span class="status-badge ${plan.status === 'COMPLETED' ? 'healthy' : (plan.status === 'FAILED' ? 'unavailable' : 'degraded')}">${plan.status}</span>
           </div>
+          ${diffHtml}
           <div class="plan-steps-container">
             ${stepsHtml}
           </div>
           <div class="plan-actions">
-            <button class="btn-success approve-plan-btn" data-id="${plan.plan_id}">
+            ${rollbackBtn}
+            <button class="btn-success approve-plan-btn" data-id="${plan.plan_id}" ${plan.status !== 'STAGED' ? 'disabled style="opacity: 0.5;"' : ''}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <polyline points="20 6 9 17 4 12"></polyline>
               </svg>
               Approve Plan
             </button>
-            <button class="btn-danger reject-plan-btn" data-id="${plan.plan_id}">
+            <button class="btn-danger reject-plan-btn" data-id="${plan.plan_id}" ${plan.status !== 'STAGED' ? 'disabled style="opacity: 0.5;"' : ''}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -270,6 +356,13 @@
           await rejectPlan(planId);
         });
       });
+
+      document.querySelectorAll(".rollback-plan-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const planId = btn.getAttribute("data-id");
+          await rollbackPlan(planId);
+        });
+      });
     } catch (err) {
       plansContainer.innerHTML = `<div class="empty-state">Failed to fetch plans. Check connection.</div>`;
     }
@@ -293,21 +386,114 @@
     }
   }
 
-  async function rejectPlan(planId) {
+  async function rollbackPlan(planId) {
     try {
-      const res = await apiFetch(`/api/plans/${planId}/reject`, {
+      const res = await apiFetch(`/api/plans/${planId}/rollback`, {
         method: "POST",
-        body: JSON.stringify({ reason: "User rejected from dashboard" }),
       });
       if (res.ok) {
-        showToast(`Plan ${planId} rejected.`);
+        const data = await res.json();
+        showToast(`Workspace reverted to checkpoint ${data.checkpoint_id}.`, "success");
         await fetchPlans();
       } else {
         const err = await res.json();
-        showToast(`Reject failed: ${err.detail || "Error"}`, "error");
+        showToast(`Rollback failed: ${err.detail || "Error"}`, "error");
       }
     } catch (e) {
-      showToast(`Network error rejecting plan.`, "error");
+      showToast(`Network error triggering rollback.`, "error");
+    }
+  }
+
+  // Operator Actions
+  async function runOperatorSnapshot() {
+    if (!operatorProjectPath) return;
+    const path = operatorProjectPath.value.trim();
+    if (!path) {
+      showToast("Please enter a project repository path", "error");
+      return;
+    }
+    try {
+      if (operatorSnapshotBtn) {
+        operatorSnapshotBtn.disabled = true;
+        operatorSnapshotBtn.textContent = "Inspecting...";
+      }
+      const res = await apiFetch("/api/operator/snapshot", {
+        method: "POST",
+        body: JSON.stringify({ project_path: path }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        showToast(`Inspect failed: ${err.detail || "Error"}`, "error");
+        return;
+      }
+      const data = await res.json();
+      const pt = data.project_type || {};
+      const git = pt.git || {};
+
+      if (operatorIntelContainer) operatorIntelContainer.style.display = "block";
+      if (operatorInfoPills) {
+        operatorInfoPills.innerHTML = `
+          <span class="info-pill active">Lang: ${escapeHtml(pt.language || "unknown")}</span>
+          <span class="info-pill">Framework: ${escapeHtml(pt.framework || "none")}</span>
+          <span class="info-pill active">Runner: ${escapeHtml(pt.test_runner || "none")}</span>
+          <span class="info-pill">Pkg: ${escapeHtml(pt.package_manager || "none")}</span>
+          <span class="info-pill ${git.is_clean ? 'clean' : 'dirty'}">Git: ${git.is_git ? (git.is_clean ? 'Clean (' + git.branch + ')' : 'Dirty') : 'Non-Git'}</span>
+          <span class="info-pill">Files: ${data.files ? data.files.length : 0}</span>
+        `;
+      }
+      showToast(`Discovered ${pt.language} workspace (${data.files ? data.files.length : 0} files).`);
+    } catch (e) {
+      showToast(`Network error inspecting project: ${e.message}`, "error");
+    } finally {
+      if (operatorSnapshotBtn) {
+        operatorSnapshotBtn.disabled = false;
+        operatorSnapshotBtn.textContent = "Inspect";
+      }
+    }
+  }
+
+  async function runOperatorDiagnoseAndPlan() {
+    if (!operatorProjectPath) return;
+    const path = operatorProjectPath.value.trim();
+    const testCmd = operatorTestCommand ? operatorTestCommand.value.trim() : null;
+    if (!path) {
+      showToast("Please enter a project repository path", "error");
+      return;
+    }
+    try {
+      if (operatorDiagnoseBtn) {
+        operatorDiagnoseBtn.disabled = true;
+        operatorDiagnoseBtn.textContent = "Diagnosing & Planning...";
+      }
+      const res = await apiFetch("/api/operator/plan-fix", {
+        method: "POST",
+        body: JSON.stringify({ project_path: path, test_command: testCmd || undefined }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        showToast(`Planning failed: ${err.detail || "Error"}`, "error");
+        return;
+      }
+      const data = await res.json();
+      const diag = data.diagnostic || {};
+      if (operatorDiagnosticContainer) operatorDiagnosticContainer.style.display = "block";
+      if (diagnosticSummaryBadge) {
+        diagnosticSummaryBadge.className = diag.passed ? "badge-pass" : "badge-fail";
+        diagnosticSummaryBadge.textContent = diag.passed ? "TESTS PASSING" : "TEST FAILURE DETECTED";
+      }
+      if (diagnosticOutputText) {
+        diagnosticOutputText.textContent = diag.root_cause_trace || diag.stdout || diag.stderr || diag.error_summary || "No diagnostic trace recorded.";
+      }
+
+      showToast(`Plan staged: ${data.plan ? data.plan.plan_id : "Plan created"}!`, "success");
+      await fetchPlans();
+    } catch (e) {
+      showToast(`Network error during plan synthesis: ${e.message}`, "error");
+    } finally {
+      if (operatorDiagnoseBtn) {
+        operatorDiagnoseBtn.disabled = false;
+        operatorDiagnoseBtn.textContent = "Diagnose & Plan Fix";
+      }
     }
   }
 
@@ -613,15 +799,30 @@
       });
     }
 
-    // 2. Setup Memory Form
+    // 2. Setup Project Operator
+    if (operatorDiagnoseBtn) {
+      operatorDiagnoseBtn.addEventListener("click", runOperatorDiagnoseAndPlan);
+    }
+    if (operatorSnapshotBtn) {
+      operatorSnapshotBtn.addEventListener("click", runOperatorSnapshot);
+    }
+    if (operatorProjectPath) {
+      operatorProjectPath.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          runOperatorDiagnoseAndPlan();
+        }
+      });
+    }
+
+    // 3. Setup Memory Form
     if (addPrefBtn) {
       addPrefBtn.addEventListener("click", savePreference);
     }
 
-    // 3. Initial Load
+    // 4. Initial Load
     await refreshAll();
 
-    // 4. Polling loop every 3.5 seconds
+    // 5. Polling loop every 3.5 seconds
     if (pollInterval) clearInterval(pollInterval);
     pollInterval = setInterval(async () => {
       await fetchStatusAndTelemetry();

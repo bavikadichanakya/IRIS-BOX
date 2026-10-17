@@ -54,6 +54,10 @@ class ExecutionPlan(BaseModel):
     status: PlanStatus = PlanStatus.STAGED
     content_hash: str = Field(default="", description="Cryptographic SHA256 digest of canonical plan structure")
     approval_token: Optional[str] = Field(default=None, description="Single-use approval token bound to content_hash")
+    diff_preview: Optional[str] = Field(default=None, description="Unified diff showing exact changes before approval")
+    checkpoint_id: Optional[str] = Field(default=None, description="Workspace rollback checkpoint ID")
+    project_path: Optional[str] = Field(default=None, description="Target workspace project path")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary execution plan metadata")
     created_at: float = Field(default_factory=time.time)
     expires_at: float = Field(default_factory=lambda: time.time() + 300.0)  # default 5 minutes TTL
 
@@ -97,6 +101,10 @@ class PlanManager:
         summary: str = "",
         steps: Optional[List[Union[PlanStep, Dict[str, Any]]]] = None,
         ttl_sec: Optional[float] = None,
+        diff_preview: Optional[str] = None,
+        checkpoint_id: Optional[str] = None,
+        project_path: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> ExecutionPlan:
         """Create, cryptographically digest, and stage a new ExecutionPlan."""
         plan_id = f"plan_{uuid.uuid4().hex[:12]}"
@@ -117,7 +125,12 @@ class PlanManager:
                 raise TypeError(f"Invalid step type: {type(s)}")
             if step_obj.permission_level == PermissionLevel.PUBLIC:
                 name = step_obj.tool_name
-                if "System" in name or "Terminal" in name or "Shell" in name or "Bash" in name or "PowerShell" in name:
+                action = (step_obj.action_type or (step_obj.parameters.get("action") if step_obj.parameters else "")).lower()
+                if action in ("checkpoint", "create_checkpoint", "validate_exit_code", "verify", "verification", "read_only", "snapshot"):
+                    step_obj.permission_level = PermissionLevel.PUBLIC
+                elif action in ("test", "run_test"):
+                    step_obj.permission_level = PermissionLevel.PROTECTED
+                elif "System" in name or "Terminal" in name or "Shell" in name or "Bash" in name or "PowerShell" in name or "Patch" in name or action in ("patch", "apply_patch", "modify"):
                     step_obj.permission_level = PermissionLevel.SENSITIVE
                 elif "Home" in name or "Assistant" in name or "Device" in name:
                     step_obj.permission_level = PermissionLevel.PROTECTED
@@ -138,6 +151,10 @@ class PlanManager:
             status=PlanStatus.STAGED,
             content_hash=content_hash,
             approval_token=approval_token,
+            diff_preview=diff_preview,
+            checkpoint_id=checkpoint_id,
+            project_path=project_path,
+            metadata=metadata or {},
             created_at=now,
             expires_at=expires_at,
         )
@@ -285,7 +302,22 @@ class PlanManager:
                     context=context,
                 )
 
-                if res.status == ExecutionStatus.SUCCEEDED:
+                is_process_failure = False
+                exit_code = None
+                output_payload = res.output
+                if hasattr(output_payload, "output_payload"):
+                    if not getattr(output_payload, "success", True):
+                        is_process_failure = True
+                    output_payload = output_payload.output_payload
+
+                if isinstance(output_payload, dict):
+                    exit_code = output_payload.get("returncode", output_payload.get("exit_code"))
+                    if exit_code is not None and exit_code != 0:
+                        is_process_failure = True
+                    elif output_payload.get("status") in ("TEST_FAILED", "FAILED") or output_payload.get("success") is False:
+                        is_process_failure = True
+
+                if res.status == ExecutionStatus.SUCCEEDED and not is_process_failure:
                     step.status = StepStatus.COMPLETED
                     step.result = {
                         "status": res.status.value,
@@ -296,9 +328,9 @@ class PlanManager:
                     step.error = None
                 else:
                     step.status = StepStatus.FAILED
-                    step.error = res.error or f"Tool '{step.tool_name}' returned status {res.status.value}"
+                    step.error = res.error or (f"Step process failed with exit code {exit_code}" if exit_code is not None else f"Tool '{step.tool_name}' returned status {res.status.value}")
                     step.result = {
-                        "status": res.status.value,
+                        "status": ExecutionStatus.FAILED.value,
                         "output": res.output,
                         "duration_ms": res.duration_ms,
                         "tool_name": step.tool_name,
@@ -325,7 +357,25 @@ class PlanManager:
                     subsequent_step.status = StepStatus.CANCELLED
                 break
 
-        if not has_failed:
+        if has_failed:
+            plan.status = PlanStatus.FAILED
+            # Trigger automatic rollback if checkpoint information exists on plan or steps
+            chk_id = plan.checkpoint_id or (plan.metadata.get("checkpoint_id") if plan.metadata else None)
+            proj_p = plan.project_path or (plan.metadata.get("project_path") if plan.metadata else None)
+            if not chk_id:
+                for s in plan.steps:
+                    if s.result and isinstance(s.result.get("output"), dict) and "checkpoint_id" in s.result["output"]:
+                        chk_id = s.result["output"]["checkpoint_id"]
+                        proj_p = s.result["output"].get("project_path", proj_p)
+                        break
+            if chk_id and proj_p:
+                try:
+                    from src.operator.workspace import ProjectWorkspace
+                    reverted = ProjectWorkspace.revert_checkpoint(proj_p, chk_id)
+                    logger.warning(f"Plan execution failed; triggered automatic rollback to checkpoint '{chk_id}'. Success: {reverted}")
+                except Exception as rollback_err:
+                    logger.error(f"Error during automatic checkpoint rollback: {rollback_err}", exc_info=True)
+        else:
             plan.status = PlanStatus.COMPLETED
 
         # Feed executed plan state back into orchestrator if available
