@@ -10,3 +10,4 @@ __pycache__/
 /models/
 data/
 *.pem
+dist/wheels/
