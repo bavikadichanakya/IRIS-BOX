@@ -221,7 +221,23 @@ if (Test-Path $WakeWordOnnx) {
     Write-Warn "Wake word model missing in models/wakeword"
 }
 
-# 4. Ollama LLM / GGUF
+# 4. Ollama LLM / GGUF & Heretic Model Registration
+$OllamaCmd = Get-Command "ollama" -ErrorAction SilentlyContinue
+$HereticModelfile = Join-Path $ModelsDir "Modelfile.heretic_iris"
+if (-not (Test-Path $HereticModelfile)) {
+    $HereticModelfile = Join-Path $ModelsDir "ollama\Modelfile.heretic_iris"
+}
+
+if ($OllamaCmd -and (Test-Path $HereticModelfile)) {
+    Write-Info "Registering promoted primary model 'heretic-iris:latest' in Ollama..."
+    & ollama create heretic-iris:latest -f $HereticModelfile
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Registered 'heretic-iris:latest' model in Ollama via Modelfile."
+    } else {
+        Write-Warn "Could not register 'heretic-iris:latest' in Ollama; fallback 'qwen2.5:7b-instruct' will be used."
+    }
+}
+
 $OllamaManifest = Join-Path $ModelsDir "ollama\manifest_qwen2.5_7b.json"
 $GgufFile = Get-ChildItem -Path $ModelsDir -Filter "*.gguf" | Select-Object -First 1
 if (Test-Path $OllamaManifest) {

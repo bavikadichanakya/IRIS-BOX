@@ -48,7 +48,7 @@ async def get_dashboard_status(request: Request):
 
     # Model name detection
     orch = getattr(request.app.state, "orchestrator", None) or getattr(health_supervisor, "orchestrator", None)
-    model_name = getattr(orch, "model", None) or os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", "qwen2.5:7b-instruct")
+    model_name = getattr(orch, "model", None) or os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", "heretic-iris:latest")
 
     # Fleet connected count
     fleet_mgr = getattr(request.app.state, "fleet_manager", None) or getattr(health_supervisor, "fleet_manager", None)

@@ -55,7 +55,8 @@ class SystemDoctor:
                 is_fatal=True,
             )
 
-        target_model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "qwen2.5:7b-instruct"
+        target_model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "heretic-iris:latest"
+        fallback_model = os.getenv("IRIS_FALLBACK_MODEL") or "qwen2.5:7b-instruct"
         tags_url = f"{base_url}/api/tags" if not base_url.endswith("/v1") else base_url.replace("/v1", "/api/tags")
 
         try:
@@ -65,6 +66,7 @@ class SystemDoctor:
                 models = [m.get("name", "") for m in data.get("models", [])]
 
                 has_target = any(target_model in m for m in models)
+                has_fallback = any(fallback_model in m for m in models)
                 if has_target:
                     return CheckResult(
                         name="Local LLM (Ollama)",
@@ -75,15 +77,26 @@ class SystemDoctor:
                         details={"endpoint": base_url, "target_model": target_model, "installed_models": models},
                         is_fatal=True,
                     )
+                elif has_fallback:
+                    return CheckResult(
+                        name="Local LLM (Ollama)",
+                        category="Inference",
+                        phase="TESTED",
+                        status="PASS",
+                        message=f"Endpoint responding at {base_url}; fallback model '{fallback_model}' verified (primary '{target_model}' not registered yet).",
+                        details={"endpoint": base_url, "target_model": target_model, "fallback_model": fallback_model, "installed_models": models},
+                        resolution=f"Run 'ollama create {target_model} -f models/Modelfile.heretic_iris' to enable primary Heretic model.",
+                        is_fatal=False,
+                    )
                 else:
                     return CheckResult(
                         name="Local LLM (Ollama)",
                         category="Inference",
                         phase="LOADED",
                         status="WARN",
-                        message=f"Ollama running at {base_url}, but target model '{target_model}' not found.",
-                        details={"installed_models": models, "target_model": target_model},
-                        resolution=f"Run 'ollama pull {target_model}' to install required model weights.",
+                        message=f"Ollama running at {base_url}, but target model '{target_model}' and fallback '{fallback_model}' not found.",
+                        details={"installed_models": models, "target_model": target_model, "fallback_model": fallback_model},
+                        resolution=f"Run 'ollama create {target_model} -f models/Modelfile.heretic_iris' or 'ollama pull {fallback_model}'.",
                         is_fatal=False,
                     )
         except Exception as exc:

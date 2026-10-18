@@ -8,6 +8,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Configuration settings for IRIS-BOX system components and vector memory."""
 
+    # LLM Models & Execution Fallback
+    DEFAULT_MODEL: str = Field(
+        default=os.getenv("IRIS_LLM_MODEL", os.getenv("OPENAI_MODEL", "heretic-iris:latest")),
+        description="Default primary LLM model"
+    )
+    FALLBACK_MODEL: str = Field(
+        default=os.getenv("IRIS_FALLBACK_MODEL", "qwen2.5:7b-instruct"),
+        description="Automatic rollback fallback model"
+    )
+
     VECTOR_DB_PATH: str = Field(default="data/vector_store", description="Path to ChromaDB persistence directory")
     EMBEDDING_MODEL_NAME: str = Field(default="all-MiniLM-L6-v2", description="HuggingFace model name or local directory")
     EMBEDDING_CACHE_DIR: str = Field(default="models/embeddings", description="Local cache directory for embeddings")

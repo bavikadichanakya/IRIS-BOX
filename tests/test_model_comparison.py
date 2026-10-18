@@ -201,3 +201,100 @@ def test_orchestrator_parses_double_braced_tool_calls():
     assert inst_tool == "HomeAssistantTool"
     assert json.loads(inst_args)["action"] == "off"
 
+
+def test_orchestrator_defaults_and_fallback_configuration(monkeypatch):
+    """Verify IRISOrchestrator defaults to heretic-iris:latest and qwen2.5:7b-instruct fallback."""
+    from src.agent.orchestrator import IRISOrchestrator
+    from src.tools.registry import ToolRegistry
+
+    # 1. Pure defaults (when env vars are not set)
+    monkeypatch.delenv("IRIS_LLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("IRIS_FALLBACK_MODEL", raising=False)
+
+    orch = IRISOrchestrator(
+        api_base="http://127.0.0.1:11434/v1",
+        api_key="ollama",
+        tool_registry=ToolRegistry
+    )
+    assert orch.model == "heretic-iris:latest"
+    assert orch.model_name == "heretic-iris:latest"
+    assert orch.fallback_model == "qwen2.5:7b-instruct"
+    assert orch.fallback_model_name == "qwen2.5:7b-instruct"
+
+    # 2. Environment variable overrides
+    monkeypatch.setenv("IRIS_LLM_MODEL", "env-model:latest")
+    monkeypatch.setenv("IRIS_FALLBACK_MODEL", "env-fallback:latest")
+    env_orch = IRISOrchestrator(
+        api_base="http://127.0.0.1:11434/v1",
+        api_key="ollama",
+        tool_registry=ToolRegistry
+    )
+    assert env_orch.model == "env-model:latest"
+    assert env_orch.fallback_model == "env-fallback:latest"
+
+    # 3. Explicit custom constructor configuration (highest precedence)
+    custom_orch = IRISOrchestrator(
+        api_base="http://127.0.0.1:11434/v1",
+        api_key="ollama",
+        model_name="custom-candidate:latest",
+        fallback_model_name="custom-fallback:latest",
+        tool_registry=ToolRegistry
+    )
+    assert custom_orch.model == "custom-candidate:latest"
+    assert custom_orch.model_name == "custom-candidate:latest"
+    assert custom_orch.fallback_model == "custom-fallback:latest"
+    assert custom_orch.fallback_model_name == "custom-fallback:latest"
+
+
+def test_orchestrator_automatic_rollback_on_model_not_found(monkeypatch):
+    """Verify that IRISOrchestrator transparently falls back to qwen2.5:7b-instruct if primary model tag is missing."""
+    import unittest.mock
+    import openai
+    from src.agent.orchestrator import IRISOrchestrator
+    from src.tools.registry import ToolRegistry
+
+    orch = IRISOrchestrator(
+        api_base="http://127.0.0.1:11434/v1",
+        api_key="ollama",
+        model="heretic-iris:latest",
+        fallback_model="qwen2.5:7b-instruct",
+        tool_registry=ToolRegistry
+    )
+
+    models_called = []
+
+    def mock_create(model, messages, **kwargs):
+        models_called.append(model)
+        if model == "heretic-iris:latest":
+            # Simulate Ollama 404 model not found
+            mock_resp = unittest.mock.MagicMock()
+            mock_resp.status_code = 404
+            raise openai.NotFoundError(
+                message="model 'heretic-iris:latest' not found, try pulling it first",
+                response=mock_resp,
+                body={"error": "model 'heretic-iris:latest' not found"}
+            )
+        else:
+            # Fallback model succeeds
+            mock_choice = unittest.mock.MagicMock()
+            mock_choice.message = unittest.mock.MagicMock(
+                content="Fallback response from qwen2.5:7b-instruct",
+                tool_calls=None,
+                function_call=None
+            )
+            mock_result = unittest.mock.MagicMock()
+            mock_result.choices = [mock_choice]
+            return mock_result
+
+    monkeypatch.setattr(orch.client.chat.completions, "create", mock_create)
+
+    result = orch.process_request("What is the status of the workstation?")
+
+    assert result.success is True
+    assert "Fallback response from qwen2.5:7b-instruct" in result.output_payload.get("response", "")
+    assert models_called == ["heretic-iris:latest", "qwen2.5:7b-instruct"]
+    assert orch.model == "qwen2.5:7b-instruct"
+    assert orch.model_name == "qwen2.5:7b-instruct"
+
+

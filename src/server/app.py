@@ -94,9 +94,10 @@ async def lifespan(app: FastAPI):
 
     api_base = os.getenv("IRIS_LLM_BASE_URL") or os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("IRIS_API_KEY", "ollama")
-    model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", "qwen2.5:7b-instruct")
+    model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", "heretic-iris:latest")
+    fallback_model = os.getenv("IRIS_FALLBACK_MODEL", "qwen2.5:7b-instruct")
 
-    orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, database=db)
+    orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, fallback_model=fallback_model, database=db)
     memory_store = getattr(orchestrator, "memory_store", None) or MemoryStore(db=db)
     plan_manager = getattr(orchestrator, "plan_manager", None) or PlanManager()
     skill_registry = getattr(orchestrator, "skill_registry", None) or SkillRegistry()

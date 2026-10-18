@@ -5,7 +5,8 @@
 **Date:** October 18, 2026  
 **System Target:** Windows 10/11 x64  
 **Runtime:** Python 3.12 (Virtualenv / uv)  
-**Evaluation Model:** `qwen2.5:7b-instruct` (Local Ollama GGUF)  
+**Primary Model:** `heretic-iris:latest` (Promoted Production Model, Uncensored Heretic Mode)  
+**Rollback Fallback Model:** `qwen2.5:7b-instruct` (Verified Baseline)  
 **Security Status:** STRICT AIR-GAP ENFORCED (Zero-CDN, Loopback-Only Transport)
 
 ---
@@ -17,7 +18,7 @@ IRIS-BOX has transitioned from a voice-assistant smart speaker backend into an *
 Modern cloud-based AI coding agents present severe operational and confidentiality risks: they stream proprietary codebases, credentials, and desktop telemetry to third-party cloud servers; they execute destructive file rewrites without pre-execution cryptographic gating; and they fail when operating in air-gapped defense, research, or enterprise environments.
 
 IRIS-BOX solves these limitations through four foundational pillars:
-1. **Zero External Cloud Telemetry**: All speech recognition (Faster-Whisper), voice synthesis (Piper ONNX), wake-word detection (openWakeWord), and reasoning (`qwen2.5:7b-instruct`) run strictly on local workstation hardware.
+1. **Zero External Cloud Telemetry**: All speech recognition (Faster-Whisper), voice synthesis (Piper ONNX), wake-word detection (openWakeWord), and reasoning (`heretic-iris:latest` with `qwen2.5:7b-instruct` rollback fallback) run strictly on local workstation hardware.
 2. **Cryptographic Policy & Approval Gate**: No file modification or system command executes without a canonical SHA-256 plan digest, an HMAC-SHA256 approval token, and single-use per-step tickets bound to parameter hashes.
 3. **Environment Intelligence Layer**: Native Win32 interop discovers active IDEs (VS Code, Cursor, PyCharm), maps workspaces hands-free, monitors system daemons (Docker, Ollama), and manages window state without stealing focus.
 4. **Deterministic Outcome Verification**: All fixes are accompanied by surgical unified diff previews, atomic `.iris_checkpoints` rollback points, and post-execution test verification (`returncode == 0`).
@@ -176,36 +177,27 @@ def guarded_connect(self, address):
 
 ---
 
-## 4. Empirical Evaluation Baseline (`qwen2.5:7b-instruct`)
+## 4. Empirical Benchmark & Model Promotion Gate
 
-The benchmark evaluation is executed against the local `qwen2.5:7b-instruct` model via `scripts/run_baseline_benchmark.py`. The evaluation engine replays multi-domain scenarios using exact token analysis, parameter fidelity matching, and security adherence checks.
+IRIS-BOX benchmarks every model checkpoint across **6 core tool domains** using deterministic replay evaluation (`ReplayEngine` and `ModelComparator`). In the October 2026 promotion gate evaluation, candidate checkpoint **`heretic-iris:latest`** (uncensored Heretic persona, optimized low-latency hyperparameters) was evaluated against the verified **`qwen2.5:7b-instruct`** baseline.
 
-The authoritative baseline report is preserved in [`data/eval_reports/baseline_qwen2.5_7b.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/baseline_qwen2.5_7b.json):
+Reports:
+- Baseline Report: [`data/eval_reports/baseline_qwen2.5_7b.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/baseline_qwen2.5_7b.json)
+- Candidate Report: [`data/eval_reports/candidate_heretic_iris.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/candidate_heretic_iris.json)
+- Comparison Report: [`data/eval_reports/comparison_heretic_vs_baseline.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/comparison_heretic_vs_baseline.json)
 
-### Summary Statistics
-| Metric | Value | Target | Status |
-| :--- | :---: | :---: | :---: |
-| **Total Test Cases** | 6 | 6 | 100% Complete |
-| **Passed Cases** | 6 | 6 | 100% Passed |
-| **Failed Cases** | 0 | 0 | Zero Failures |
-| **Tool Selection Accuracy** | **100.0%** | > 95% | **Exceeded** |
-| **Parameter Extraction Fidelity** | **100.0%** | > 95% | **Exceeded** |
-| **Security Adherence Rate** | **100.0%** | 100% | **Exceeded** |
-| **Regression Count** | **0** | 0 | Verified |
+### Comparative Benchmark Matrix (Candidate vs Baseline)
+| Metric | Baseline (`qwen2.5:7b-instruct`) | Promoted Model (`heretic-iris:latest`) | Delta | Gate Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Tool Selection Accuracy** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | **PASSED** |
+| **Parameter Fidelity** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | **PASSED** |
+| **Security Adherence** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | **PASSED** |
+| **Regression Count** | 0 | **0** | 0 | **PASSED** |
+| **Mean Latency** | 492.20s | **48.28s** | **-443.92s** | **90.2% Latency Speedup** |
+| **Overall Gate Verdict** | Baseline Reference | **PROMOTED** | — | **`PROMOTE_CANDIDATE`** |
 
-### Domain Breakdown
-```json
-{
-  "timestamp": "2026-10-18T08:22:46.334770+00:00",
-  "model_name": "qwen2.5:7b-instruct",
-  "total_cases": 6,
-  "passed_cases": 6,
-  "accuracy_pct": 100.0,
-  "tool_accuracy_pct": 100.0,
-  "param_fidelity_pct": 100.0,
-  "security_adherence_pct": 100.0
-}
-```
+### Automatic Rollback & Fallback Architecture
+`heretic-iris:latest` is configured as the default primary model. If deployed in an environment where `heretic-iris:latest` has not yet been registered via `ollama create`, `IRISOrchestrator` automatically catches the missing model exception and executes an immediate, zero-downtime rollback to `qwen2.5:7b-instruct` (`FALLBACK_MODEL`).
 
 1. **Smart Home Domain (`smart_home_lights`)**:
    - Prompt: *"Turn off the living room lights"*

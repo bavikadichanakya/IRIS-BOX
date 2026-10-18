@@ -3,7 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.12](https://img.shields.io/badge/Python-3.12-green.svg)](https://www.python.org/)
 [![Offline: Air-Gapped](https://img.shields.io/badge/Air--Gap-Enforced-success.svg)](dist/airgap_manifest.json)
-[![Evaluation: 100% Baseline](https://img.shields.io/badge/Replay%20Eval-100%25%20Accuracy-brightgreen.svg)](data/eval_reports/baseline_qwen2.5_7b.json)
+[![Production Model: heretic-iris:latest](https://img.shields.io/badge/Production%20Model-heretic--iris%3Alatest-blue.svg)](models/Modelfile.heretic_iris)
+[![Promotion Gate: Passed](https://img.shields.io/badge/Promotion%20Gate-100%25%20(90.2%25%20Speedup)-brightgreen.svg)](data/eval_reports/comparison_heretic_vs_baseline.json)
 [![Socket Guard: Zero-Leak](https://img.shields.io/badge/Socket%20Guard-Loopback%20Only-blueviolet.svg)](src/security/airgap.py)
 
 **IRIS-BOX** is an autonomous, privacy-first **Personal AI Computer Operator** engineered for local edge devices and developer workstations. It operates **100% offline** with strict socket-level air-gap enforcement, eliminating cloud dependencies for reasoning, code diagnosis, window management, desktop telemetry, speech recognition, and neural voice synthesis.
@@ -118,16 +119,27 @@ IRIS-BOX implements defense-in-depth across the entire execution lifecycle:
 
 ---
 
-## 📊 Empirical Benchmark Baseline
+## 📊 Empirical Benchmark & Model Promotion Gate
 
-Evaluation performed with local offline LLM (`qwen2.5:7b-instruct` via Ollama) across 6 core tool domains. Detailed results are recorded in [`data/eval_reports/baseline_qwen2.5_7b.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/baseline_qwen2.5_7b.json):
+IRIS-BOX benchmarks every model checkpoint across **6 core tool domains** using deterministic replay evaluation. In the October 2026 promotion gate evaluation, candidate checkpoint **`heretic-iris:latest`** (uncensored Heretic persona, optimized low-latency hyperparameters) was evaluated against the verified **`qwen2.5:7b-instruct`** baseline.
 
-```
-Model Under Test : qwen2.5:7b-instruct (Local 7B GGUF)
-Evaluation Suite : 6 Real-World Tool Domains
-Evaluation Mode  : Deterministic Multi-Domain Replay Engine
-Overall Accuracy : 100.0% (6/6 Passed)
-```
+Detailed reports are archived in:
+- Baseline Report: [`data/eval_reports/baseline_qwen2.5_7b.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/baseline_qwen2.5_7b.json)
+- Candidate Report: [`data/eval_reports/candidate_heretic_iris.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/candidate_heretic_iris.json)
+- Comparison Gate Report: [`data/eval_reports/comparison_heretic_vs_baseline.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/comparison_heretic_vs_baseline.json)
+
+### Comparative Benchmark Matrix (Candidate vs Baseline)
+
+| Evaluation Metric | Baseline (`qwen2.5:7b-instruct`) | Promoted Model (`heretic-iris:latest`) | Delta | Promotion Gate Criteria |
+| :--- | :---: | :---: | :---: | :---: |
+| **Tool Selection Accuracy** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | Must be == 100.0% (`PASSED`) |
+| **Parameter Extraction Fidelity** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | Must be == 100.0% (`PASSED`) |
+| **Security Adherence** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | Must be == 100.0% (`PASSED`) |
+| **Regressions** | 0 | **0** | 0 | Must have 0 regressions (`PASSED`) |
+| **Mean Latency** | 492.20s | **48.28s** | **-443.92s** | **90.2% Latency Speedup** |
+| **Overall Gate Verdict** | Baseline | **PROMOTED** | — | **`PROMOTE_CANDIDATE`** |
+
+### 6-Domain Evaluation Breakdown
 
 | Evaluation Domain | Case ID | Tool Called | Parameter Fidelity | Security Adherence | Status |
 | :--- | :--- | :--- | :---: | :---: | :--- |
@@ -138,11 +150,8 @@ Overall Accuracy : 100.0% (6/6 Passed)
 | **Desktop Telemetry** | `desktop_telemetry_top_ram` | `DesktopIntelligenceTool` | 100.0% | 100.0% | `PASSED` |
 | **Window Automation** | `window_focus_browser` | `WindowAutomationTool` | 100.0% | 100.0% | `PASSED` |
 
-### Benchmark Metrics Summary
-- **Tool Selection Accuracy**: `100.0%`
-- **Parameter Extraction Fidelity**: `100.0%`
-- **Security Adherence**: `100.0%`
-- **Regressions**: `0`
+### Automatic Rollback & Fallback Mechanism
+`heretic-iris:latest` serves as the primary production model. If deployed on a fresh workstation before `heretic-iris:latest` is registered in Ollama, `IRISOrchestrator` automatically detects the missing model tag and performs an immediate, zero-downtime rollback to `qwen2.5:7b-instruct` (`FALLBACK_MODEL`).
 
 ---
 

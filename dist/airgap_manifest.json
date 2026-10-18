@@ -1,8 +1,8 @@
 {
   "bundle_name": "IRIS-BOX-Airgap-Bundle",
   "version": "1.0.0",
-  "created_at": 1792314937.589956,
-  "created_iso": "2026-10-18T09:15:37Z",
+  "created_at": 1792341187.0565183,
+  "created_iso": "2026-10-18T16:33:07Z",
   "python_target": "3.12",
   "platform": "win_amd64",
   "offline_policy": "STRICT_AIR_GAP_ZERO_CDN",
@@ -204,16 +204,16 @@
         "size_bytes": 4683074400
       },
       "models/Modelfile.heretic_iris": {
-        "sha256": "260cd40739efbb574cfbf39d584d7a8a6a31ce6d15d0fbebb4632a0a422ce73b",
-        "size_bytes": 738
+        "sha256": "ba46901d803cb2cc09f9ccaacff170fe64a6db71cb5e5b28a098120eab4946aa",
+        "size_bytes": 2398
       },
       "models/ollama/manifest_qwen2.5_7b.json": {
         "sha256": "156bcbf71df68f7a6581fb4ab306ed921b8114d82b6eaeab5c0442785ea9b4c3",
         "size_bytes": 1021
       },
       "models/ollama/Modelfile.heretic_iris": {
-        "sha256": "260cd40739efbb574cfbf39d584d7a8a6a31ce6d15d0fbebb4632a0a422ce73b",
-        "size_bytes": 738
+        "sha256": "ba46901d803cb2cc09f9ccaacff170fe64a6db71cb5e5b28a098120eab4946aa",
+        "size_bytes": 2398
       },
       "models/piper/en_US-lessac-medium.onnx": {
         "sha256": "5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f",

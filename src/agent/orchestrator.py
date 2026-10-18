@@ -202,7 +202,10 @@ class IRISOrchestrator:
         self,
         api_base: str,
         api_key: str,
-        model: str = "dots-studio/dots-3-note-preview:free",
+        model: Optional[str] = None,
+        model_name: Optional[str] = None,
+        fallback_model: Optional[str] = None,
+        fallback_model_name: Optional[str] = None,
         tool_registry: Optional[Union[Type[ToolRegistry], ToolRegistry]] = None,
         event_bus: Optional[EventBus] = None,
         tool_manager: Optional[ToolManager] = None,
@@ -218,7 +221,15 @@ class IRISOrchestrator:
         self.api_base = api_base
         self.api_key = api_key
         self.client = openai.OpenAI(base_url=api_base, api_key=api_key)
-        self.model = model
+
+        from src.config.settings import settings
+        default_primary = getattr(settings, "DEFAULT_MODEL", "heretic-iris:latest")
+        default_fallback = getattr(settings, "FALLBACK_MODEL", "qwen2.5:7b-instruct")
+
+        self.model = model_name or model or os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL") or default_primary
+        self.model_name = self.model
+        self.fallback_model = fallback_model_name or fallback_model or os.getenv("IRIS_FALLBACK_MODEL") or default_fallback
+        self.fallback_model_name = self.fallback_model
         self.tool_registry = tool_registry or ToolRegistry
         self.event_bus = event_bus or EventBus()
         self.skill_registry = skill_registry or SkillRegistry(event_bus=self.event_bus)
@@ -246,6 +257,19 @@ class IRISOrchestrator:
         self._tool_schemas: Optional[List[Dict]] = None
         self._payload_models: Dict[str, Type[BaseModel]] = {}
         self.session_memory = SessionMemory()
+
+    def _is_model_not_found_error(self, exc: Exception) -> bool:
+        """Check if an exception indicates the requested model was not found in the local runner."""
+        if isinstance(exc, getattr(openai, "NotFoundError", ())):
+            return True
+        if getattr(exc, "status_code", None) == 404:
+            return True
+        err_msg = str(exc).lower()
+        if "not found" in err_msg and ("model" in err_msg or "tag" in err_msg or "404" in err_msg):
+            return True
+        if "does not exist" in err_msg and "model" in err_msg:
+            return True
+        return False
 
     def _build_semantic_rag_prompt(self, user_prompt: str) -> Optional[str]:
         """
@@ -768,12 +792,29 @@ class IRISOrchestrator:
             step_count += 1
 
             def _call_completion():
-                return self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools_param if tools_param else None,
-                    tool_choice="auto" if tools_param else None,
-                )
+                try:
+                    return self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        tools=tools_param if tools_param else None,
+                        tool_choice="auto" if tools_param else None,
+                    )
+                except Exception as exc:
+                    if self.fallback_model and self.model != self.fallback_model and self._is_model_not_found_error(exc):
+                        logger.warning(
+                            "Primary model '%s' not found. Falling back to rollback model '%s'.",
+                            self.model,
+                            self.fallback_model
+                        )
+                        self.model = self.fallback_model
+                        self.model_name = self.fallback_model
+                        return self.client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            tools=tools_param if tools_param else None,
+                            tool_choice="auto" if tools_param else None,
+                        )
+                    raise
 
             try:
                 response = self.resilient_provider.execute_with_recovery_sync(
@@ -1256,13 +1297,31 @@ class IRISOrchestrator:
             call_id = f"call_{step_count}_{uuid.uuid4().hex[:6]}"
 
             async def _create_stream():
-                return await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools_param if tools_param else None,
-                    tool_choice="auto" if tools_param else None,
-                    stream=True,
-                )
+                try:
+                    return await async_client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        tools=tools_param if tools_param else None,
+                        tool_choice="auto" if tools_param else None,
+                        stream=True,
+                    )
+                except Exception as exc:
+                    if self.fallback_model and self.model != self.fallback_model and self._is_model_not_found_error(exc):
+                        logger.warning(
+                            "Primary model '%s' not found during stream. Falling back to rollback model '%s'.",
+                            self.model,
+                            self.fallback_model
+                        )
+                        self.model = self.fallback_model
+                        self.model_name = self.fallback_model
+                        return await async_client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            tools=tools_param if tools_param else None,
+                            tool_choice="auto" if tools_param else None,
+                            stream=True,
+                        )
+                    raise
 
             try:
                 stream = self.resilient_provider.stream_with_recovery(
