@@ -1,0 +1,116 @@
+{
+  "timestamp": "2026-10-18T15:53:55.242443+00:00",
+  "model_name": "heretic-iris:latest",
+  "total_cases": 6,
+  "passed_cases": 4,
+  "failed_cases": 2,
+  "accuracy_pct": 66.67,
+  "tool_accuracy_pct": 66.67,
+  "param_fidelity_pct": 66.67,
+  "security_adherence_pct": 100.0,
+  "avg_latency_ms": 352401.0,
+  "median_latency_ms": 140843.32,
+  "mean_latency_sec": 352.4,
+  "median_latency_sec": 140.84,
+  "regressions": [],
+  "results": [
+    {
+      "case_id": "smart_home_lights",
+      "tool_called": "",
+      "actual_params": {},
+      "tool_selection_correct": false,
+      "params_matched": false,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 250840.6943000009,
+      "passed": false,
+      "status": "COMPLETED",
+      "output_summary": "{{\"name\": \"HomeAssistantTool\", \"arguments\": {\"entity_id\": \"light.living_room_lights\", \"domain\": \"light\", \"action\": \"off\"}}",
+      "error": null
+    },
+    {
+      "case_id": "system_terminal_echo",
+      "tool_called": "SystemCommandTool",
+      "actual_params": {
+        "command": "echo hello",
+        "action_type": "terminal"
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 45.37590000836644,
+      "passed": true,
+      "status": "PLAN_PREVIEW_REQUIRED",
+      "output_summary": "Execution plan for: Create an execution plan to echo hello and dir",
+      "error": null
+    },
+    {
+      "case_id": "browser_navigation",
+      "tool_called": "BrowserTool",
+      "actual_params": {
+        "url": "https://github.com",
+        "action": "goto"
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 133341.31389998947,
+      "passed": true,
+      "status": "COMPLETED",
+      "output_summary": "",
+      "error": null
+    },
+    {
+      "case_id": "operator_workspace_diagnosis",
+      "tool_called": "",
+      "actual_params": {},
+      "tool_selection_correct": false,
+      "params_matched": false,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 115203.30280000053,
+      "passed": false,
+      "status": "COMPLETED",
+      "output_summary": "{{\"name\": \"ProjectOperatorTool\", \"arguments\": {\"action\": \"diagnose_failures\"}}}",
+      "error": null
+    },
+    {
+      "case_id": "desktop_telemetry_top_ram",
+      "tool_called": "DesktopIntelligenceTool",
+      "actual_params": {
+        "action": "get_top_processes",
+        "sort_by": "memory",
+        "limit": 5
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 1466630.016700001,
+      "passed": true,
+      "status": "COMPLETED",
+      "output_summary": "",
+      "error": null
+    },
+    {
+      "case_id": "window_focus_browser",
+      "tool_called": "WindowAutomationTool",
+      "actual_params": {
+        "action": "focus_window",
+        "query": "browser"
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 148345.3237000067,
+      "passed": true,
+      "status": "FAILED",
+      "output_summary": "Could not find or focus window matching 'browser'.",
+      "error": null
+    }
+  ],
+  "report_file_path": "data\\eval_reports\\benchmark_20261018_155355.json"
+}

@@ -11,6 +11,7 @@ from src.eval.models import (
 )
 from src.eval.replay_engine import ReplayEngine
 from src.eval.dataset import get_standard_benchmark_suite, BENCHMARK_CASES_6_DOMAINS
+from src.eval.comparator import ModelComparator, ModelComparisonReport
 
 __all__ = [
     "TaskTestCase",
@@ -20,4 +21,6 @@ __all__ = [
     "ReplayEngine",
     "get_standard_benchmark_suite",
     "BENCHMARK_CASES_6_DOMAINS",
+    "ModelComparator",
+    "ModelComparisonReport",
 ]
