@@ -10,6 +10,7 @@ from src.skills.base import BaseSkill, SkillExecutionResult, SkillHealthResult, 
 from src.skills.core.browser import BrowserAutomationSkill
 from src.skills.core.home_assistant import HomeAssistantSkill
 from src.skills.core.system_command import SystemCommandSkill
+from src.skills.core.operator_skill import ProjectOperatorSkill
 from src.tools.capability import Capability, ExecutionStatus, PermissionLevel, ToolResult
 
 logger = logging.getLogger("iris.skills.registry")
@@ -33,6 +34,7 @@ class SkillRegistry:
         self.register_skill(SystemCommandSkill())
         self.register_skill(BrowserAutomationSkill())
         self.register_skill(HomeAssistantSkill())
+        self.register_skill(ProjectOperatorSkill())
 
     def register_skill(self, skill: BaseSkill):
         """Register a new skill instance in the registry."""

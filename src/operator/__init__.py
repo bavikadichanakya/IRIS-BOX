@@ -4,10 +4,15 @@ IRIS AI Project Operator: Autonomous workspace discovery, diagnostic, patch plan
 
 from src.operator.workspace import ProjectWorkspace, ProjectSnapshot
 from src.operator.task_runner import OperatorTaskRunner, DiagnosticReport
+from src.operator.resolver import WorkspaceResolver, parse_window_title
+from src.operator.summarizer import OperatorSummarizer
 
 __all__ = [
     "ProjectWorkspace",
     "ProjectSnapshot",
     "OperatorTaskRunner",
     "DiagnosticReport",
+    "WorkspaceResolver",
+    "parse_window_title",
+    "OperatorSummarizer",
 ]

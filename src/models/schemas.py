@@ -38,8 +38,10 @@ class ProjectOperatorAction(BaseModel):
     """
     Schema for an AI Project Operator action (checkpoint, patch, test, verification, rollback).
     """
-    action: str
-    project_path: str
+    action: str = "diagnose"
+    project_path: Optional[str] = None
+    project_name: Optional[str] = None
+    spoken_reference: Optional[str] = None
     checkpoint_name: Optional[str] = "checkpoint"
     checkpoint_id: Optional[str] = None
     file_path: Optional[str] = None

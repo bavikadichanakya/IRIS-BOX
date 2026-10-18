@@ -489,6 +489,20 @@ class ProjectOperatorTool(BaseTool):
 
         action = action_payload.action
         proj_path = action_payload.project_path
+        if not proj_path or not os.path.isdir(proj_path):
+            from src.operator.resolver import WorkspaceResolver
+            resolver = WorkspaceResolver()
+            spoken_ref = action_payload.spoken_reference or action_payload.project_name or proj_path
+            resolved = resolver.resolve_project_path(spoken_ref)
+            if resolved:
+                proj_path = resolved
+            else:
+                return AgentExecutionResult(
+                    success=False,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={"status": "AMBIGUOUS_PROJECT", "prompt": "Which project should I inspect?"},
+                    error="AMBIGUOUS_PROJECT: Which project should I inspect?",
+                )
 
         try:
             if action in ("create_checkpoint", "checkpoint"):
