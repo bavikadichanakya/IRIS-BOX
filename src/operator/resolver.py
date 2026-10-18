@@ -14,6 +14,7 @@ GENERIC_PROJECT_REFERENCES: Set[str] = {
     "the project",
     "here",
     "current project",
+    "my current project",
     "current workspace",
     "this workspace",
     "the workspace",
@@ -21,6 +22,27 @@ GENERIC_PROJECT_REFERENCES: Set[str] = {
     "workspace",
     "here project",
 }
+
+
+def extract_reference_from_utterance(utterance: str) -> str:
+    """
+    Extract target project name or reference from natural spoken utterance.
+    Strips wake words, greetings, and common intent prefixes.
+    """
+    if not utterance:
+        return ""
+    s = utterance.strip().rstrip(".!?")
+    # Strip wake phrases
+    s = re.sub(r"^(hey\s+iris|iris|okay\s+iris|ok\s+iris)[,\s]*", "", s, flags=re.IGNORECASE).strip()
+    # Strip common operator query prefixes
+    patterns = [
+        r"^(please\s+)?(check|diagnose|see|tell\s+me)\s+(why\s+)?tests?\s+(are\s+)?failing\s+in\s+",
+        r"^(please\s+)?(check|inspect|diagnose|test|fix|run\s+tests?\s+(in|on|for)?)\s+",
+        r"^(what|why)\s+(is|are)\s+failing\s+in\s+",
+    ]
+    for pat in patterns:
+        s = re.sub(pat, "", s, flags=re.IGNORECASE).strip()
+    return s
 
 
 def parse_window_title(title: str) -> Optional[str]:
@@ -313,6 +335,10 @@ class WorkspaceResolver:
                 self.set_active_project(resolved)
                 logger.info(f"Resolved direct project path: {resolved}")
                 return resolved
+
+            extracted = extract_reference_from_utterance(clean_ref)
+            if extracted:
+                clean_ref = extracted
 
         # 2. Generic / Empty reference -> Recency or Active Window Fallback
         is_generic = (not clean_ref) or (clean_ref.lower() in GENERIC_PROJECT_REFERENCES)

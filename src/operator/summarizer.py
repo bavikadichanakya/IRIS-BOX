@@ -199,4 +199,15 @@ class OperatorSummarizer:
         else:
             return f"Could not close window matching '{target}'."
 
+    @staticmethod
+    def summarize_fix_verification(project_name: str, exit_code: int = 0) -> str:
+        """
+        Produce a natural voice summary after a patch execution and test verification.
+        Example: "Fixed issue in payment-service. All tests are now passing with exit code 0."
+        """
+        if exit_code == 0:
+            return f"Fixed issue in {project_name}. All tests are now passing with exit code 0."
+        else:
+            return f"Attempted repair in {project_name}, but tests still failed with exit code {exit_code}."
+
 
