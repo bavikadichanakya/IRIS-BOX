@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional, Any, Union
+from typing import Dict, List, Literal, Optional, Any, Union
 
 from pydantic import BaseModel, Field
 
@@ -45,10 +45,12 @@ class ProjectOperatorAction(BaseModel):
     checkpoint_name: Optional[str] = "checkpoint"
     checkpoint_id: Optional[str] = None
     file_path: Optional[str] = None
-    patch: Optional[Union[str, Dict[str, Any]]] = None
+    patch: Optional[Union[str, Dict[str, Any], List[Dict[str, Any]]]] = None
+    patches: Optional[List[Dict[str, Any]]] = None
     diff: Optional[str] = None
     find_content: Optional[str] = None
     replace_content: Optional[str] = None
+    affected_files: Optional[List[str]] = None
     test_command: Optional[str] = None
     command: Optional[str] = None
     timeout_sec: int = 30

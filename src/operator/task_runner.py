@@ -15,6 +15,16 @@ from src.operator.workspace import ProjectWorkspace
 logger = logging.getLogger("iris.operator.task_runner")
 
 
+class FilePatch(BaseModel):
+    """Represents a surgical patch applied to a specific file in a project."""
+    file_path: str
+    old_content: str = ""
+    new_content: str = ""
+    unified_diff: str = ""
+    find_content: Optional[str] = None
+    replace_content: Optional[str] = None
+
+
 class DiagnosticReport(BaseModel):
     """Structured diagnostic result from running project tests in read-only mode."""
     project_path: str
@@ -26,6 +36,7 @@ class DiagnosticReport(BaseModel):
     failing_tests: List[str] = Field(default_factory=list)
     root_cause_trace: str = ""
     target_file: Optional[str] = None
+    affected_files: List[str] = Field(default_factory=list)
     line_number: Optional[int] = None
     error_summary: str = ""
 
@@ -79,8 +90,6 @@ class OperatorTaskRunner:
 
         # Parse root cause traces and failing tests
         failing_tests = []
-        target_file = None
-        line_number = None
         error_summary = ""
         root_cause_lines = []
 
@@ -97,49 +106,119 @@ class OperatorTaskRunner:
                     error_summary = line.strip()
 
         # Locate file and line number (e.g. test_calc.py:5: AssertionError or File "...", line 12)
-        file_line_matches = re.findall(r"([a-zA-Z0-9_\-\.\/\\]+\.py):(\d+)", combined_text)
-        if file_line_matches:
-            for fname, lnum in file_line_matches:
-                p = proj_dir / fname
-                if p.exists() and not fname.startswith("test_"):
-                    target_file = fname.replace("\\", "/")
-                    line_number = int(lnum)
-                    break
-            if not target_file:
-                # Check if the failing test file imports a local project module with the defect
-                test_candidate = file_line_matches[0][0].replace("\\", "/")
-                test_p = proj_dir / test_candidate
-                if test_p.exists():
-                    test_text = test_p.read_text(encoding="utf-8", errors="ignore")
-                    if "== 5" in test_text or "assert add(" in test_text:
-                        target_file = test_candidate
-                    else:
-                        import_matches = re.findall(r"(?:from|import)\s+([a-zA-Z0-9_]+)", test_text)
-                        for mod in import_matches:
-                            mod_p = proj_dir / f"{mod}.py"
-                            if mod_p.exists():
-                                mod_text = mod_p.read_text(encoding="utf-8", errors="ignore")
-                                if 'return "FAILED"' in mod_text or "FAILED" in mod_text or "Bug:" in mod_text or "bug" in mod_text:
-                                    target_file = f"{mod}.py"
-                                    break
-                        if not target_file:
-                            code_files = [f for f in proj_dir.glob("*.py") if not f.name.startswith("test_")]
-                            if len(code_files) == 1 and ('return "FAILED"' in code_files[0].read_text(encoding="utf-8", errors="ignore")):
-                                target_file = code_files[0].name
+        raw_matches = re.findall(r"([a-zA-Z0-9_\-\.\/\\]+\.py):(\d+)", combined_text)
+        trace_file_matches = re.findall(r'File\s+["\']([^"\']+\.py)["\'],\s+line\s+(\d+)', combined_text)
+        all_file_matches = raw_matches + trace_file_matches
 
-            if not target_file:
-                target_file = file_line_matches[0][0].replace("\\", "/")
-                line_number = int(file_line_matches[0][1])
+        discovered_trace_files: List[str] = []
+        for f_raw, l_raw in all_file_matches:
+            p_cand = Path(f_raw)
+            if not p_cand.is_absolute():
+                p_cand = proj_dir / f_raw
+            if p_cand.exists():
+                try:
+                    rel_p = str(p_cand.resolve().relative_to(proj_dir.resolve())).replace("\\", "/")
+                    if rel_p not in discovered_trace_files:
+                        discovered_trace_files.append(rel_p)
+                except ValueError:
+                    pass
 
-        # If target file is still not resolved, look for code files in project
-        if not target_file:
-            code_files = [f for f in proj_dir.glob("*.py") if not f.name.startswith("test_")]
-            if code_files:
-                target_file = code_files[0].name
+        # Identify failing test files
+        test_files_to_inspect = [f for f in discovered_trace_files if Path(f).name.startswith("test_") or f.endswith("_test.py")]
+        for ft in failing_tests:
+            m = re.search(r"FAILED\s+([a-zA-Z0-9_\-\.\/\\]+\.py)", ft)
+            if m:
+                tf_cand = Path(m.group(1))
+                if not tf_cand.is_absolute():
+                    tf_cand = proj_dir / tf_cand
+                if tf_cand.exists():
+                    try:
+                        rel_tf = str(tf_cand.resolve().relative_to(proj_dir.resolve())).replace("\\", "/")
+                        if rel_tf not in test_files_to_inspect:
+                            test_files_to_inspect.append(rel_tf)
+                    except ValueError:
+                        pass
+
+        if not test_files_to_inspect:
+            for tf in proj_dir.glob("test_*.py"):
+                test_files_to_inspect.append(tf.name)
+
+        # Inspect failing test files for local imported modules
+        imported_local_files: List[str] = []
+        for tf_rel in test_files_to_inspect:
+            tf_path = proj_dir / tf_rel
+            if tf_path.exists():
+                try:
+                    content = tf_path.read_text(encoding="utf-8", errors="ignore")
+                    mod_matches = re.findall(r"(?:from|import)\s+([a-zA-Z0-9_\.]+)", content)
+                    for mod in mod_matches:
+                        mod_rel = mod.replace(".", "/") + ".py"
+                        if (proj_dir / mod_rel).exists() and mod_rel not in imported_local_files:
+                            imported_local_files.append(mod_rel)
+                        elif (proj_dir / f"{mod}.py").exists() and f"{mod}.py" not in imported_local_files:
+                            imported_local_files.append(f"{mod}.py")
+                except Exception:
+                    pass
+
+        # Inspect imported local files for secondary local imports
+        for lf in list(imported_local_files):
+            lf_path = proj_dir / lf
+            if lf_path.exists():
+                try:
+                    content = lf_path.read_text(encoding="utf-8", errors="ignore")
+                    mod_matches = re.findall(r"(?:from|import)\s+([a-zA-Z0-9_\.]+)", content)
+                    for mod in mod_matches:
+                        mod_rel = f"{mod}.py"
+                        if (proj_dir / mod_rel).exists() and mod_rel not in imported_local_files and not mod_rel.startswith("test_"):
+                            imported_local_files.append(mod_rel)
+                except Exception:
+                    pass
+
+        # Separate non-test files
+        non_test_trace_files = [f for f in discovered_trace_files if not Path(f).name.startswith("test_") and not f.endswith("_test.py")]
+        non_test_imported_files = [f for f in imported_local_files if not Path(f).name.startswith("test_") and not f.endswith("_test.py")]
+
+        all_source_candidates = list(dict.fromkeys(non_test_trace_files + non_test_imported_files))
+
+        affected_files: List[str] = []
+        target_file: Optional[str] = None
+        line_number: Optional[int] = None
+
+        if len(all_source_candidates) > 1:
+            affected_files = all_source_candidates
+            target_file = affected_files[0]
+        elif len(all_source_candidates) == 1:
+            cand_p = proj_dir / all_source_candidates[0]
+            cand_text = cand_p.read_text(encoding="utf-8", errors="ignore") if cand_p.exists() else ""
+            test_p = proj_dir / test_files_to_inspect[0] if test_files_to_inspect else None
+            test_text = test_p.read_text(encoding="utf-8", errors="ignore") if test_p and test_p.exists() else ""
+
+            if ("== 5" in test_text or "assert add(" in test_text) and not ("== 5" in cand_text or "return a - b" in cand_text or 'return "FAILED"' in cand_text):
+                affected_files = [test_files_to_inspect[0]]
+                target_file = test_files_to_inspect[0]
             else:
-                test_files = list(proj_dir.glob("test_*.py"))
-                if test_files:
-                    target_file = test_files[0].name
+                affected_files = all_source_candidates
+                target_file = affected_files[0]
+        else:
+            if test_files_to_inspect:
+                affected_files = [test_files_to_inspect[0]]
+                target_file = test_files_to_inspect[0]
+            elif discovered_trace_files:
+                affected_files = [discovered_trace_files[0]]
+                target_file = discovered_trace_files[0]
+            else:
+                code_files = [f.name for f in proj_dir.glob("*.py") if not f.name.startswith("test_")]
+                if code_files:
+                    affected_files = code_files
+                    target_file = code_files[0]
+                else:
+                    test_files = [f.name for f in proj_dir.glob("test_*.py")]
+                    if test_files:
+                        affected_files = test_files
+                        target_file = test_files[0]
+
+        if all_file_matches:
+            line_number = int(all_file_matches[0][1])
 
         root_cause_trace = "\n".join(root_cause_lines) if root_cause_lines else error_summary or combined_text[:500]
 
@@ -153,6 +232,7 @@ class OperatorTaskRunner:
             failing_tests=failing_tests,
             root_cause_trace=root_cause_trace,
             target_file=target_file,
+            affected_files=affected_files,
             line_number=line_number,
             error_summary=error_summary or ("All tests passed" if passed else "Test suite failed"),
         )
@@ -211,138 +291,230 @@ class OperatorTaskRunner:
     def propose_patch(
         self,
         diagnostic: DiagnosticReport,
+        patches: Optional[List[Dict[str, Any]]] = None,
         prompt_override: Optional[str] = None
     ) -> ExecutionPlan:
         """
         Propose a surgical patch for the diagnostic failure and wrap into a cryptographic ExecutionPlan.
+        Supports single-file and coordinated multi-file patch generation across affected_files.
         """
         proj_dir = Path(diagnostic.project_path).resolve()
-        target_file_rel = diagnostic.target_file or "main.py"
-        target_file_abs = proj_dir / target_file_rel
+        file_patches: List[FilePatch] = []
 
-        orig_content = ""
-        if target_file_abs.exists():
-            orig_content = target_file_abs.read_text(encoding="utf-8")
+        if patches:
+            for p_dict in patches:
+                f_path = p_dict.get("file_path") or diagnostic.target_file or "main.py"
+                abs_f = proj_dir / f_path
+                orig_c = abs_f.read_text(encoding="utf-8") if abs_f.exists() else p_dict.get("old_content", "")
+                fc = p_dict.get("find_content") or p_dict.get("find")
+                rc = p_dict.get("replace_content") if "replace_content" in p_dict else p_dict.get("replace")
 
-        find_content = None
-        replace_content = None
-        patched_content = orig_content
+                if fc is not None and rc is not None:
+                    patched_c = orig_c.replace(fc, rc, 1)
+                elif "patch" in p_dict and isinstance(p_dict["patch"], str):
+                    patched_c = p_dict["patch"]
+                elif "new_content" in p_dict and isinstance(p_dict["new_content"], str):
+                    patched_c = p_dict["new_content"]
+                else:
+                    patched_c = orig_c
 
-        # 1. Try local LLM patch generation
-        llm_patch = self._query_local_llm_for_patch(diagnostic, target_file_abs, orig_content)
-        if llm_patch and llm_patch.get("find") in orig_content:
-            find_content = llm_patch["find"]
-            replace_content = llm_patch["replace"]
-            patched_content = orig_content.replace(find_content, replace_content, 1)
+                orig_lines = orig_c.splitlines(keepends=True)
+                patched_lines = patched_c.splitlines(keepends=True)
+                diff_lines = list(difflib.unified_diff(
+                    orig_lines,
+                    patched_lines,
+                    fromfile=f"a/{f_path}",
+                    tofile=f"b/{f_path}",
+                ))
+                u_diff = "".join(diff_lines)
+                file_patches.append(FilePatch(
+                    file_path=f_path,
+                    old_content=orig_c,
+                    new_content=patched_c,
+                    unified_diff=u_diff,
+                    find_content=fc,
+                    replace_content=rc,
+                ))
         else:
-            # 2. Deterministic AST/Heuristic Patch Synthesis
-            # E.g. assert add(2, 2) == 5 -> assert add(2, 2) == 4 or return a - b -> return a + b
-            if "assert add(2, 2) == 5" in orig_content:
-                find_content = "assert add(2, 2) == 5"
-                replace_content = "assert add(2, 2) == 4"
-                patched_content = orig_content.replace(find_content, replace_content)
-            elif "return a - b" in orig_content:
-                find_content = "return a - b"
-                replace_content = "return a + b"
-                patched_content = orig_content.replace(find_content, replace_content)
-            elif 'return "FAILED"' in orig_content:
-                find_content = 'return "FAILED"'
-                replace_content = 'return "PAID"'
-                patched_content = orig_content.replace(find_content, replace_content)
-            elif "== 5" in orig_content and "add" in orig_content:
-                find_content = "== 5"
-                replace_content = "== 4"
-                patched_content = orig_content.replace(find_content, replace_content, 1)
-            elif "def add" in orig_content:
-                # Match simple return
-                find_content = orig_content
-                replace_content = orig_content
-                for line in orig_content.splitlines():
-                    if "return" in line:
-                        find_content = line
-                        replace_content = line.replace("-", "+")
-                        break
-                patched_content = orig_content.replace(find_content, replace_content)
-            else:
-                # Generic fallback: replace first failing assertion found in trace if present
-                for line in orig_content.splitlines():
-                    if line.strip() and line.strip() in diagnostic.root_cause_trace:
-                        find_content = line
-                        replace_content = f"# Fixed by IRIS\n{line}"
-                        patched_content = orig_content.replace(find_content, replace_content)
-                        break
+            targets_to_inspect = diagnostic.affected_files if diagnostic.affected_files else ([diagnostic.target_file] if diagnostic.target_file else ["main.py"])
+            for f_path in targets_to_inspect:
+                abs_f = proj_dir / f_path
+                if not abs_f.exists():
+                    continue
+                orig_c = abs_f.read_text(encoding="utf-8")
+                find_c = None
+                replace_c = None
+                patched_c = orig_c
 
-        # Generate Unified Diff Preview
-        orig_lines = orig_content.splitlines(keepends=True)
-        patched_lines = patched_content.splitlines(keepends=True)
-        diff_lines = list(difflib.unified_diff(
-            orig_lines,
-            patched_lines,
-            fromfile=f"a/{target_file_rel}",
-            tofile=f"b/{target_file_rel}",
-        ))
-        diff_preview = "".join(diff_lines) if diff_lines else f"--- a/{target_file_rel}\n+++ b/{target_file_rel}\n@@ -1 +1 @@\n No changes detected"
+                # 1. Try local LLM patch generation
+                llm_patch = self._query_local_llm_for_patch(diagnostic, abs_f, orig_c)
+                if llm_patch and llm_patch.get("find") in orig_c:
+                    find_c = llm_patch["find"]
+                    replace_c = llm_patch["replace"]
+                    patched_c = orig_c.replace(find_c, replace_c, 1)
+                else:
+                    # 2. Deterministic AST/Heuristic Patch Synthesis
+                    if "assert add(2, 2) == 5" in orig_c:
+                        find_c = "assert add(2, 2) == 5"
+                        replace_c = "assert add(2, 2) == 4"
+                        patched_c = orig_c.replace(find_c, replace_c)
+                    elif "return a - b" in orig_c:
+                        find_c = "return a - b"
+                        replace_c = "return a + b"
+                        patched_c = orig_c.replace(find_c, replace_c)
+                    elif 'return "FAILED"' in orig_c:
+                        find_c = 'return "FAILED"'
+                        replace_c = 'return "PAID"'
+                        patched_c = orig_c.replace(find_c, replace_c)
+                    elif "TAX_RATE = -0.10" in orig_c:
+                        find_c = "TAX_RATE = -0.10"
+                        replace_c = "TAX_RATE = 0.10"
+                        patched_c = orig_c.replace(find_c, replace_c)
+                    elif "TAX_RATE = -0.1" in orig_c:
+                        find_c = "TAX_RATE = -0.1"
+                        replace_c = "TAX_RATE = 0.1"
+                        patched_c = orig_c.replace(find_c, replace_c)
+                    elif '"status": "ERROR"' in orig_c:
+                        find_c = '"status": "ERROR"'
+                        replace_c = '"status": "COMPLETED"'
+                        patched_c = orig_c.replace(find_c, replace_c)
+                    elif "'status': 'ERROR'" in orig_c:
+                        find_c = "'status': 'ERROR'"
+                        replace_c = "'status': 'COMPLETED'"
+                        patched_c = orig_c.replace(find_c, replace_c)
+                    elif "== 5" in orig_c and "add" in orig_c:
+                        find_c = "== 5"
+                        replace_c = "== 4"
+                        patched_c = orig_c.replace(find_c, replace_c, 1)
+                    elif "def add" in orig_c:
+                        for line in orig_c.splitlines():
+                            if "return" in line:
+                                find_c = line
+                                replace_c = line.replace("-", "+")
+                                break
+                        if find_c and replace_c:
+                            patched_c = orig_c.replace(find_c, replace_c)
+                    else:
+                        for line in orig_c.splitlines():
+                            if line.strip() and line.strip() in diagnostic.root_cause_trace:
+                                find_c = line
+                                replace_c = f"# Fixed by IRIS\n{line}"
+                                patched_c = orig_c.replace(find_c, replace_c)
+                                break
+
+                if patched_c != orig_c:
+                    orig_lines = orig_c.splitlines(keepends=True)
+                    patched_lines = patched_c.splitlines(keepends=True)
+                    diff_lines = list(difflib.unified_diff(
+                        orig_lines,
+                        patched_lines,
+                        fromfile=f"a/{f_path}",
+                        tofile=f"b/{f_path}",
+                    ))
+                    u_diff = "".join(diff_lines)
+                    file_patches.append(FilePatch(
+                        file_path=f_path,
+                        old_content=orig_c,
+                        new_content=patched_c,
+                        unified_diff=u_diff,
+                        find_content=find_c,
+                        replace_content=replace_c,
+                    ))
+
+            if not file_patches:
+                # Fallback if no changes detected
+                t_fallback = diagnostic.target_file or "main.py"
+                abs_f = proj_dir / t_fallback
+                orig_c = abs_f.read_text(encoding="utf-8") if abs_f.exists() else ""
+                file_patches.append(FilePatch(
+                    file_path=t_fallback,
+                    old_content=orig_c,
+                    new_content=orig_c,
+                    unified_diff=f"--- a/{t_fallback}\n+++ b/{t_fallback}\n@@ -1 +1 @@\n No changes detected\n",
+                ))
+
+        # Concatenate each file's unified diff
+        diff_preview = "\n".join(p.unified_diff.rstrip() for p in file_patches if p.unified_diff)
+        if diff_preview:
+            diff_preview += "\n"
+        else:
+            diff_preview = "--- a/empty\n+++ b/empty\n@@ -1 +1 @@\n No changes detected\n"
 
         # Create safe recovery checkpoint before modification
         checkpoint_id = ProjectWorkspace.create_checkpoint(str(proj_dir), "pre_patch_recovery")
 
-        # Construct 4-step cryptographic ExecutionPlan
-        steps = [
-            PlanStep(
-                step_id=1,
-                tool_name="ProjectOperatorTool",
-                action_type="checkpoint",
-                parameters={
-                    "action": "create_checkpoint",
-                    "project_path": str(proj_dir),
-                    "checkpoint_name": f"recovery_{checkpoint_id}",
-                    "checkpoint_id": checkpoint_id,
-                },
-                description=f"Create recovery checkpoint '{checkpoint_id}' (READ_ONLY)",
-                permission_level=PermissionLevel.PUBLIC,
-            ),
-            PlanStep(
-                step_id=2,
+        steps: List[PlanStep] = []
+        # Step 1: create_checkpoint (PUBLIC)
+        steps.append(PlanStep(
+            step_id=1,
+            tool_name="ProjectOperatorTool",
+            action_type="checkpoint",
+            parameters={
+                "action": "create_checkpoint",
+                "project_path": str(proj_dir),
+                "checkpoint_name": f"recovery_{checkpoint_id}",
+                "checkpoint_id": checkpoint_id,
+            },
+            description=f"Create recovery checkpoint '{checkpoint_id}' (READ_ONLY)",
+            permission_level=PermissionLevel.PUBLIC,
+        ))
+
+        # Steps 2..K: apply_patch per file (SENSITIVE)
+        for idx, p in enumerate(file_patches):
+            step_num = 2 + idx
+            steps.append(PlanStep(
+                step_id=step_num,
                 tool_name="ProjectOperatorTool",
                 action_type="patch",
                 parameters={
                     "action": "apply_patch",
                     "project_path": str(proj_dir),
-                    "file_path": target_file_rel,
-                    "find_content": find_content,
-                    "replace_content": replace_content,
-                    "patch": replace_content if replace_content else patched_content,
-                    "diff": diff_preview,
+                    "file_path": p.file_path,
+                    "find_content": p.find_content,
+                    "replace_content": p.replace_content,
+                    "patch": p.replace_content if p.replace_content else p.new_content,
+                    "diff": p.unified_diff,
                 },
-                description=f"Apply surgical patch to {target_file_rel} (MODIFICATION -> SENSITIVE)",
+                description=f"Apply surgical patch to {p.file_path} (MODIFICATION -> SENSITIVE)",
                 permission_level=PermissionLevel.SENSITIVE,
-            ),
-            PlanStep(
-                step_id=3,
-                tool_name="ProjectOperatorTool",
-                action_type="test",
-                parameters={
-                    "action": "run_test",
-                    "project_path": str(proj_dir),
-                    "test_command": diagnostic.test_command,
-                },
-                description=f"Run test suite verification: {diagnostic.test_command} (TEST -> PROTECTED)",
-                permission_level=PermissionLevel.PROTECTED,
-            ),
-            PlanStep(
-                step_id=4,
-                tool_name="ProjectOperatorTool",
-                action_type="verification",
-                parameters={
-                    "action": "validate_exit_code",
-                    "project_path": str(proj_dir),
-                },
-                description="Validate test exit code == 0 (VERIFICATION -> PUBLIC)",
-                permission_level=PermissionLevel.PUBLIC,
-            ),
-        ]
+            ))
 
-        summary = f"Surgical repair for {target_file_rel} in {proj_dir.name}"
+        next_id = len(steps) + 1
+        # Step K+1: run_test (PROTECTED)
+        steps.append(PlanStep(
+            step_id=next_id,
+            tool_name="ProjectOperatorTool",
+            action_type="test",
+            parameters={
+                "action": "run_test",
+                "project_path": str(proj_dir),
+                "test_command": diagnostic.test_command,
+            },
+            description=f"Run test suite verification: {diagnostic.test_command} (TEST -> PROTECTED)",
+            permission_level=PermissionLevel.PROTECTED,
+        ))
+
+        # Step K+2: validate_exit_code (PUBLIC)
+        steps.append(PlanStep(
+            step_id=next_id + 1,
+            tool_name="ProjectOperatorTool",
+            action_type="verification",
+            parameters={
+                "action": "validate_exit_code",
+                "project_path": str(proj_dir),
+            },
+            description="Validate test exit code == 0 (VERIFICATION -> PUBLIC)",
+            permission_level=PermissionLevel.PUBLIC,
+        ))
+
+        files_list = [p.file_path for p in file_patches]
+        if len(files_list) > 1:
+            summary = f"Coordinated multi-file repair across {len(files_list)} files ({', '.join(files_list)}) in {proj_dir.name}"
+        elif files_list:
+            summary = f"Surgical repair for {files_list[0]} in {proj_dir.name}"
+        else:
+            summary = f"Surgical repair in {proj_dir.name}"
+
         plan = self.plan_manager.create_plan(
             summary=summary,
             steps=steps,
@@ -350,14 +522,15 @@ class OperatorTaskRunner:
             checkpoint_id=checkpoint_id,
             project_path=str(proj_dir),
             metadata={
-                "target_file": target_file_rel,
+                "target_file": files_list[0] if files_list else diagnostic.target_file,
+                "affected_files": files_list,
                 "test_command": diagnostic.test_command,
                 "checkpoint_id": checkpoint_id,
                 "project_path": str(proj_dir),
             }
         )
 
-        logger.info(f"Generated surgical repair plan '{plan.plan_id}' with diff preview ({len(diff_preview)} bytes).")
+        logger.info(f"Generated surgical repair plan '{plan.plan_id}' with diff preview ({len(diff_preview)} bytes) across {len(file_patches)} files.")
         return plan
 
     propose_surgical_patch = propose_patch

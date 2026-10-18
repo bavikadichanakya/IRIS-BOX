@@ -364,9 +364,16 @@ class PlanManager:
             proj_p = plan.project_path or (plan.metadata.get("project_path") if plan.metadata else None)
             if not chk_id:
                 for s in plan.steps:
-                    if s.result and isinstance(s.result.get("output"), dict) and "checkpoint_id" in s.result["output"]:
-                        chk_id = s.result["output"]["checkpoint_id"]
-                        proj_p = s.result["output"].get("project_path", proj_p)
+                    out = s.result.get("output") if s.result else None
+                    if hasattr(out, "output_payload"):
+                        out = out.output_payload
+                    if isinstance(out, dict) and "checkpoint_id" in out:
+                        chk_id = out["checkpoint_id"]
+                        proj_p = out.get("project_path", proj_p)
+                        break
+                    if s.parameters and s.parameters.get("checkpoint_id"):
+                        chk_id = s.parameters["checkpoint_id"]
+                        proj_p = s.parameters.get("project_path", proj_p)
                         break
             if chk_id and proj_p:
                 try:

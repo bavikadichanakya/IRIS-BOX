@@ -536,6 +536,7 @@ class ProjectOperatorTool(BaseTool):
                         "passed": diag.passed,
                         "failing_tests": diag.failing_tests,
                         "target_file": diag.target_file,
+                        "affected_files": getattr(diag, "affected_files", [diag.target_file] if diag.target_file else []),
                         "error_summary": diag.error_summary,
                         "voice_confirmation": voice_msg,
                     },
@@ -595,6 +596,47 @@ class ProjectOperatorTool(BaseTool):
                     success=True,
                     tool_name="ProjectOperatorTool",
                     output_payload={"status": "PATCH_APPLIED", "file_path": str(file_rel)},
+                )
+
+            elif action in ("apply_multi_patch", "multi_patch"):
+                patches_list = action_payload.patches or []
+                if not patches_list and isinstance(action_payload.patch, list):
+                    patches_list = action_payload.patch
+                applied_files = []
+                for p_info in patches_list:
+                    file_rel = p_info.get("file_path") or ""
+                    target_file = Path(proj_path) / file_rel if not os.path.isabs(file_rel) else Path(file_rel)
+                    if not target_file.exists():
+                        return AgentExecutionResult(
+                            success=False,
+                            tool_name="ProjectOperatorTool",
+                            output_payload={"status": "FILE_NOT_FOUND", "file": str(target_file)},
+                            error=f"Target file not found: {target_file}",
+                        )
+                    content = target_file.read_text(encoding="utf-8")
+                    patched_content = content
+                    fc = p_info.get("find_content") or p_info.get("find")
+                    rc = p_info.get("replace_content") if "replace_content" in p_info else p_info.get("replace")
+                    if fc is not None and rc is not None:
+                        if fc not in patched_content:
+                            return AgentExecutionResult(
+                                success=False,
+                                tool_name="ProjectOperatorTool",
+                                output_payload={"status": "FIND_TARGET_NOT_FOUND", "file": file_rel},
+                                error=f"find_content '{fc}' not found in {file_rel}",
+                            )
+                        patched_content = patched_content.replace(fc, rc, 1)
+                    elif "patch" in p_info and isinstance(p_info["patch"], str):
+                        patched_content = p_info["patch"]
+                    elif "new_content" in p_info and isinstance(p_info["new_content"], str):
+                        patched_content = p_info["new_content"]
+                    target_file.write_text(patched_content, encoding="utf-8")
+                    applied_files.append(str(file_rel))
+
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={"status": "MULTI_PATCH_APPLIED", "applied_files": applied_files},
                 )
 
             elif action in ("run_test", "test"):

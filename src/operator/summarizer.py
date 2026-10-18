@@ -19,11 +19,12 @@ class OperatorSummarizer:
         """Prompt user when workspace project cannot be resolved."""
         return "Which project should I inspect?"
 
-    @staticmethod
-    def summarize_diagnostic(diagnostic: DiagnosticReport, project_name: Optional[str] = None) -> str:
+    @classmethod
+    def summarize_diagnostic(cls, diagnostic: DiagnosticReport, project_name: Optional[str] = None) -> str:
         """
         Produce a natural voice summary of test suite diagnostic results.
         Example: "Inspecting your auth-service project. One test failed in test_auth.py..."
+        Example (multi-file): "Inspecting your billing-service project. One test failed across 2 files (models.py, processor.py)..."
         """
         pname = project_name or Path(diagnostic.project_path).name or "project"
 
@@ -37,6 +38,20 @@ class OperatorSummarizer:
         if len(root_summary) > 60:
             root_summary = root_summary[:57] + "..."
 
+        affected = getattr(diagnostic, "affected_files", []) or []
+        if len(affected) > 1:
+            files_str = ", ".join(affected)
+            if fail_count <= 1:
+                return (
+                    f"Inspecting your {pname} project. One test failed across {len(affected)} files ({files_str}). "
+                    f"Error: {root_summary}."
+                )
+            else:
+                return (
+                    f"Inspecting your {pname} project. {fail_count} tests failed across {len(affected)} files ({files_str}). "
+                    f"Root cause: {root_summary}."
+                )
+
         if fail_count <= 1:
             return (
                 f"Inspecting your {pname} project. One test failed in {target_f}. "
@@ -48,12 +63,30 @@ class OperatorSummarizer:
                 f"Root cause: {root_summary}."
             )
 
+    summarize_diagnosis = summarize_diagnostic
+
     @staticmethod
     def summarize_plan(plan: ExecutionPlan, project_name: Optional[str] = None) -> str:
         """
         Produce a natural voice summary for a staged repair plan.
         """
         pname = project_name or (Path(plan.project_path).name if plan.project_path else "the project")
+        patched_files = []
+        if plan.metadata and "affected_files" in plan.metadata and isinstance(plan.metadata["affected_files"], list):
+            patched_files = list(plan.metadata["affected_files"])
+        if not patched_files:
+            for s in plan.steps:
+                fp = s.parameters.get("file_path")
+                if fp and fp not in patched_files:
+                    patched_files.append(fp)
+
+        if len(patched_files) > 1:
+            files_str = ", ".join(patched_files)
+            return (
+                f"I have staged a coordinated repair plan across {len(patched_files)} files ({files_str}) for {pname}. "
+                f"Would you like me to create a recovery checkpoint, apply the patches, and verify the tests?"
+            )
+
         return (
             f"I have staged a surgical repair plan for {pname}. "
             f"Would you like me to create a recovery checkpoint, apply the patch, and verify the tests?"

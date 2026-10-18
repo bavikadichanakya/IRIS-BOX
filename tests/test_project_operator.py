@@ -14,7 +14,8 @@ from src.agent.plan_manager import (
     PlanStep,
 )
 from src.operator.workspace import ProjectWorkspace
-from src.operator.task_runner import OperatorTaskRunner
+from src.operator.task_runner import OperatorTaskRunner, FilePatch, DiagnosticReport
+from src.operator.summarizer import OperatorSummarizer
 from src.tools.manager import ToolManager
 
 
@@ -271,3 +272,165 @@ async def test_operator_rest_endpoints(dummy_python_project):
         roll_data = roll_res.json()
         assert roll_data["status"] == "ROLLED_BACK"
         assert roll_data["checkpoint_id"] == fix_data["plan"]["checkpoint_id"]
+
+
+@pytest.fixture
+def multi_file_python_project(tmp_path):
+    """
+    Creates a multi-file Python project with defects spanning multiple files:
+    - models.py: TAX_RATE = -0.10 (should be 0.10)
+    - processor.py: returns {"total": total, "status": "ERROR"} (should be "COMPLETED")
+    - test_billing.py: failing test importing both models and processor
+    """
+    proj_dir = tmp_path / "billing_service"
+    proj_dir.mkdir(parents=True, exist_ok=True)
+
+    models_file = proj_dir / "models.py"
+    models_file.write_text(
+        "TAX_RATE = -0.10\n\n"
+        "def calculate_tax(subtotal: float) -> float:\n"
+        "    return subtotal * TAX_RATE\n",
+        encoding="utf-8"
+    )
+
+    processor_file = proj_dir / "processor.py"
+    processor_file.write_text(
+        "from models import calculate_tax\n\n"
+        "def process_order(subtotal: float) -> dict:\n"
+        "    tax = calculate_tax(subtotal)\n"
+        "    total = subtotal + tax\n"
+        "    return {\"total\": round(total, 2), \"status\": \"ERROR\"}\n",
+        encoding="utf-8"
+    )
+
+    test_file = proj_dir / "test_billing.py"
+    test_file.write_text(
+        "from models import TAX_RATE\n"
+        "from processor import process_order\n\n"
+        "def test_billing_calculation():\n"
+        "    assert TAX_RATE == 0.10\n"
+        "    res = process_order(100.0)\n"
+        "    assert res[\"total\"] == 110.0\n"
+        "    assert res[\"status\"] == \"COMPLETED\"\n",
+        encoding="utf-8"
+    )
+
+    pyproject = proj_dir / "pyproject.toml"
+    pyproject.write_text(
+        "[project]\nname = \"billing-service\"\nversion = \"0.1.0\"\n",
+        encoding="utf-8"
+    )
+
+    pytest_ini = proj_dir / "pytest.ini"
+    pytest_ini.write_text(
+        "[pytest]\npythonpath = .\n",
+        encoding="utf-8"
+    )
+
+    return proj_dir
+
+
+@pytest.mark.asyncio
+async def test_multi_file_operator_diagnosis_patch_and_atomic_rollback(multi_file_python_project):
+    """
+    Acceptance test for coordinated multi-file diagnostics, diffs & atomic rollbacks:
+    1. Verify multi-file project setup with defects in models.py and processor.py.
+    2. Run diagnose_failure() and verify both models.py and processor.py are in affected_files.
+    3. Stage coordinated multi-file ExecutionPlan and verify unified diff headers for a/models.py and a/processor.py.
+    4. Test Atomic Multi-File Rollback: Stage deliberately bad patch (processor.py still returns "BROKEN"),
+       approve and execute, assert failure and both models.py and processor.py are rolled back.
+    5. Test Verified Multi-File Fix: Stage valid patch across both files, approve and execute,
+       assert pytest passes with exit_code == 0 and both files retain the fixed code.
+    """
+    project_path = str(multi_file_python_project)
+    tool_manager = ToolManager()
+    plan_manager = PlanManager()
+    runner = OperatorTaskRunner(plan_manager=plan_manager)
+
+    # 1 & 2. Run multi-file diagnosis
+    diagnostic = await runner.diagnose_failure(project_path)
+    assert diagnostic.passed is False
+    assert diagnostic.exit_code != 0
+    assert "models.py" in diagnostic.affected_files
+    assert "processor.py" in diagnostic.affected_files
+
+    # Verify voice diagnostic summary mentions multi-file information
+    diag_summary = OperatorSummarizer.summarize_diagnosis(diagnostic, project_name="billing-service")
+    assert "billing-service" in diag_summary
+    assert "2 files" in diag_summary or "models.py" in diag_summary
+
+    # 3. Stage coordinated multi-file ExecutionPlan
+    plan = runner.propose_patch(diagnostic)
+    assert plan is not None
+    assert plan.status == PlanStatus.STAGED
+    assert plan.diff_preview is not None
+    assert "--- a/models.py" in plan.diff_preview
+    assert "+++ b/models.py" in plan.diff_preview
+    assert "--- a/processor.py" in plan.diff_preview
+    assert "+++ b/processor.py" in plan.diff_preview
+
+    # Verify 5-step sequential cryptographic structure:
+    # Step 1: create_checkpoint (PUBLIC)
+    # Step 2: apply_patch models.py (SENSITIVE)
+    # Step 3: apply_patch processor.py (SENSITIVE)
+    # Step 4: run_test (PROTECTED)
+    # Step 5: validate_exit_code (PUBLIC)
+    assert len(plan.steps) == 5
+    assert plan.steps[0].permission_level == PermissionLevel.PUBLIC
+    assert plan.steps[1].permission_level == PermissionLevel.SENSITIVE
+    assert plan.steps[2].permission_level == PermissionLevel.SENSITIVE
+    assert plan.steps[3].permission_level == PermissionLevel.PROTECTED
+    assert plan.steps[4].permission_level == PermissionLevel.PUBLIC
+
+    # Verify voice plan summary
+    plan_summary = OperatorSummarizer.summarize_plan(plan, project_name="billing-service")
+    assert "coordinated repair plan across 2 files" in plan_summary
+    assert "models.py" in plan_summary
+    assert "processor.py" in plan_summary
+
+    # 4. Test Atomic Multi-File Rollback
+    # Stage deliberately bad patch where models.py is fixed to 0.10, but processor.py is patched to "BROKEN"
+    bad_patches = [
+        {"file_path": "models.py", "find": "TAX_RATE = -0.10", "replace": "TAX_RATE = 0.10"},
+        {"file_path": "processor.py", "find": '"status": "ERROR"', "replace": '"status": "BROKEN"'},
+    ]
+    bad_plan = runner.propose_patch(diagnostic, patches=bad_patches)
+    bad_token = auth_manager.create_plan_approval_token(bad_plan.plan_id, bad_plan.content_hash)
+    assert plan_manager.approve_plan(bad_plan.plan_id, token=bad_token) is True
+
+    executed_bad_plan = await plan_manager.execute_approved_plan(bad_plan.plan_id, orchestrator=tool_manager)
+    assert executed_bad_plan.status == PlanStatus.FAILED
+    # Step 4 (run_test) failed due to exit code != 0
+    assert executed_bad_plan.steps[3].status == StepStatus.FAILED
+    assert executed_bad_plan.steps[4].status == StepStatus.CANCELLED
+
+    # Verify atomic rollback: BOTH models.py and processor.py must be restored to original pre-plan state
+    models_rolled_back = (multi_file_python_project / "models.py").read_text(encoding="utf-8")
+    proc_rolled_back = (multi_file_python_project / "processor.py").read_text(encoding="utf-8")
+    assert "TAX_RATE = -0.10" in models_rolled_back
+    assert "TAX_RATE = 0.10" not in models_rolled_back
+    assert '"status": "ERROR"' in proc_rolled_back
+    assert '"status": "BROKEN"' not in proc_rolled_back
+
+    # 5. Test Verified Multi-File Fix
+    # Stage valid coordinated patch across both files
+    valid_patches = [
+        {"file_path": "models.py", "find": "TAX_RATE = -0.10", "replace": "TAX_RATE = 0.10"},
+        {"file_path": "processor.py", "find": '"status": "ERROR"', "replace": '"status": "COMPLETED"'},
+    ]
+    valid_plan = runner.propose_patch(diagnostic, patches=valid_patches)
+    valid_token = auth_manager.create_plan_approval_token(valid_plan.plan_id, valid_plan.content_hash)
+    assert plan_manager.approve_plan(valid_plan.plan_id, token=valid_token) is True
+
+    executed_valid_plan = await plan_manager.execute_approved_plan(valid_plan.plan_id, orchestrator=tool_manager)
+    assert executed_valid_plan.status == PlanStatus.COMPLETED
+    assert executed_valid_plan.steps[3].status == StepStatus.COMPLETED
+    assert executed_valid_plan.steps[3].result["output"]["exit_code"] == 0
+    assert executed_valid_plan.steps[4].status == StepStatus.COMPLETED
+
+    # Verify both files retain their fixed code on disk
+    models_fixed = (multi_file_python_project / "models.py").read_text(encoding="utf-8")
+    proc_fixed = (multi_file_python_project / "processor.py").read_text(encoding="utf-8")
+    assert "TAX_RATE = 0.10" in models_fixed
+    assert '"status": "COMPLETED"' in proc_fixed
+
