@@ -12,36 +12,7 @@ from src.audio.stt import Transcriber
 from src.skills.core.system_command import SystemCommandSkill
 
 
-LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
-
-
-@contextlib.contextmanager
-def socket_air_gap_guard():
-    """
-    Strict socket interceptor guaranteeing offline air-gap enforcement.
-    Intercepts any outbound connection attempt to non-loopback addresses
-    and raises RuntimeError immediately.
-    """
-    orig_connect = socket.socket.connect
-
-    def guarded_connect(self, address):
-        if isinstance(address, tuple):
-            host = str(address[0])
-        else:
-            host = str(address)
-
-        if host in LOOPBACK_HOSTS or host.startswith("127."):
-            return orig_connect(self, address)
-
-        raise RuntimeError(
-            f"AIR_GAP_VIOLATION: Non-loopback network attempt blocked to {host}:{address}"
-        )
-
-    socket.socket.connect = guarded_connect
-    try:
-        yield
-    finally:
-        socket.socket.connect = orig_connect
+from src.security.airgap import socket_air_gap_guard, LOOPBACK_HOSTS, AirGapViolationError
 
 
 def check_ollama_prerequisites(model_name: str = "qwen2.5:7b-instruct") -> bool:
