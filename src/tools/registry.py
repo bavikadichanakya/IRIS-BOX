@@ -479,8 +479,8 @@ class BrowserTool(BaseTool):
 @ToolRegistry.register_tool("ProjectOperatorTool")
 class ProjectOperatorTool(BaseTool):
     """
-    Surgical workspace patch and verification operator tool.
-    Supports checkpoint creation, surgical patching, test execution, and rollback.
+    Autonomous AI project operator tool for diagnosing test failures, workspace test inspection, creating recovery checkpoints, surgical patching, and test verification.
+    Use this tool whenever the user asks to inspect a project, check why tests fail, diagnose workspace errors, run project tests, create checkpoints, or apply code patches.
     """
 
     def execute(self, action_payload: ProjectOperatorAction) -> AgentExecutionResult:
@@ -505,7 +505,41 @@ class ProjectOperatorTool(BaseTool):
                 )
 
         try:
-            if action in ("create_checkpoint", "checkpoint"):
+            if action in ("diagnose", "diagnosis", "inspect"):
+                import asyncio
+                import concurrent.futures
+                from src.operator.task_runner import OperatorTaskRunner
+                from src.operator.summarizer import OperatorSummarizer
+
+                runner = OperatorTaskRunner()
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+
+                if loop and loop.is_running():
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                        diag = ex.submit(lambda: asyncio.run(runner.diagnose_failure(proj_path, test_command=action_payload.test_command))).result()
+                else:
+                    diag = asyncio.run(runner.diagnose_failure(proj_path, test_command=action_payload.test_command))
+
+                voice_msg = OperatorSummarizer.summarize_diagnostic(diag, project_name=Path(proj_path).name)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="ProjectOperatorTool",
+                    output_payload={
+                        "status": "DIAGNOSIS_COMPLETED",
+                        "project_path": proj_path,
+                        "project_name": Path(proj_path).name,
+                        "passed": diag.passed,
+                        "failing_tests": diag.failing_tests,
+                        "target_file": diag.target_file,
+                        "error_summary": diag.error_summary,
+                        "voice_confirmation": voice_msg,
+                    },
+                )
+
+            elif action in ("create_checkpoint", "checkpoint"):
                 cid = ProjectWorkspace.create_checkpoint(proj_path, action_payload.checkpoint_name or "checkpoint")
                 return AgentExecutionResult(
                     success=True,

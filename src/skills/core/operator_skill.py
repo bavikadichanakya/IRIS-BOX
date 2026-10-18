@@ -137,10 +137,13 @@ class ProjectOperatorSkill(BaseSkill):
                     resolved_path,
                     test_command=test_command,
                 )
-                plan = await self.task_runner.propose_surgical_patch(
-                    diagnostic,
-                    user_intent=params.get("intent", "Diagnose and repair project"),
-                )
+                import inspect
+                if inspect.iscoroutinefunction(getattr(self.task_runner, "propose_surgical_patch", None)):
+                    plan = await self.task_runner.propose_surgical_patch(diagnostic, user_intent=params.get("intent", "Diagnose and repair project"))
+                elif hasattr(self.task_runner, "propose_patch"):
+                    plan = self.task_runner.propose_patch(diagnostic, prompt_override=params.get("intent"))
+                else:
+                    plan = self.task_runner.propose_surgical_patch(diagnostic)
                 voice_text = self.summarizer.summarize_plan(
                     plan,
                     project_name=project_name,

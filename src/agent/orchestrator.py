@@ -463,6 +463,7 @@ class IRISOrchestrator:
                 success=True,
                 tool_name=tool_name,
                 output_payload=output_dict,
+                status="COMPLETED",
                 error=None
             )
         elif tool_result.status in (ExecutionStatus.DENIED, ExecutionStatus.UNAVAILABLE):
@@ -470,6 +471,7 @@ class IRISOrchestrator:
                 success=False,
                 tool_name=tool_name,
                 output_payload={},
+                status="CONFIRMATION_REQUIRED" if tool_result.confirmation_token else "DENIED",
                 error=tool_result.error or f"Tool '{tool_name}' execution was {tool_result.status.value.lower()}.",
                 confirmation_token=tool_result.confirmation_token,
                 pending_action=tool_result.pending_action
@@ -572,6 +574,8 @@ class IRISOrchestrator:
                 "plan_id": plan.plan_id,
                 "summary": plan.summary,
                 "steps": [s.model_dump() for s in plan.steps],
+                "content_hash": plan.content_hash,
+                "approval_token": plan.approval_token,
             }
             return AgentExecutionResult(
                 success=True,
@@ -579,16 +583,20 @@ class IRISOrchestrator:
                 status="PLAN_PREVIEW_REQUIRED",
                 plan_id=plan.plan_id,
                 output_payload=res_payload,
-                pending_action={"plan_id": plan.plan_id},
+                pending_action={"plan_id": plan.plan_id, "approval_token": plan.approval_token},
                 error=None
             )
 
         tool_schemas = self._get_tool_schemas()
 
         system_content = (
-            "You are IRIS, an AI assistant. ALWAYS call the matching tool function "
-            "(e.g. SystemCommandTool for terminal/system commands) whenever the user requests "
-            "executing a system command, running a terminal action, or controlling device/browser capabilities."
+            "You are IRIS, an AI desktop and smart assistant on the user's laptop.\n"
+            "CRITICAL RULES FOR ACTIONS:\n"
+            "1. When the user asks to open or visit a website, video, or URL (such as YouTube, Google, Reddit, etc.), "
+            "you MUST call `BrowserTool` with action='goto' and the destination url (e.g. 'https://www.youtube.com'). "
+            "NEVER claim that a website is opened without invoking `BrowserTool`.\n"
+            "2. When the user asks to run a system or terminal command, call SystemCommandTool.\n"
+            "3. Answer concisely in 1-2 sentences."
         )
         if self.memory_store:
             try:
@@ -777,6 +785,21 @@ class IRISOrchestrator:
                 tool_name = message.function_call.name
                 raw_args = message.function_call.arguments
 
+            if not tool_name and assistant_content.strip():
+                clean_buf = assistant_content.strip()
+                if "```json" in clean_buf:
+                    clean_buf = clean_buf.split("```json", 1)[1].split("```", 1)[0].strip()
+                elif "```" in clean_buf:
+                    clean_buf = clean_buf.split("```", 1)[1].split("```", 1)[0].strip()
+                if clean_buf.startswith("{") and clean_buf.endswith("}"):
+                    try:
+                        parsed_call = json.loads(clean_buf)
+                        if isinstance(parsed_call, dict) and any(k in parsed_call for k in ("name", "tool", "tool_name")):
+                            tool_name = parsed_call.get("name") or parsed_call.get("tool") or parsed_call.get("tool_name")
+                            raw_args = json.dumps(parsed_call.get("arguments", parsed_call.get("args", {})))
+                    except Exception:
+                        pass
+
             if not tool_name:
                 text_response = assistant_content.strip() or "No response generated"
                 out_payload = {}
@@ -922,6 +945,9 @@ class IRISOrchestrator:
                 if confirmation_token and formatted_res.success:
                     return formatted_res
 
+                if tool_name == "BrowserTool" and formatted_res.success and formatted_res.output_payload.get("opened_on_desktop"):
+                    return formatted_res
+
                 confirmation_token = None
 
                 messages.append({
@@ -1038,7 +1064,13 @@ class IRISOrchestrator:
         tool_schemas = self._get_tool_schemas()
 
         system_content = (
-            "You are IRIS, an AI smart speaker assistant. If a user asks for home automation, system tasks, or browser tasks, call the appropriate tool."
+            "You are IRIS, an AI desktop and smart assistant on the user's laptop.\n"
+            "CRITICAL RULES FOR ACTIONS:\n"
+            "1. When the user asks to open or visit a website, video, or URL (such as YouTube, Google, Reddit, etc.), "
+            "you MUST call `BrowserTool` with action='goto' and the destination url (e.g. 'https://www.youtube.com'). "
+            "NEVER claim that a website is opened without invoking `BrowserTool`.\n"
+            "2. When the user asks to run a system or terminal command, call SystemCommandTool.\n"
+            "3. Answer concisely in 1-2 sentences."
         )
         if self.memory_store:
             try:
@@ -1098,6 +1130,7 @@ class IRISOrchestrator:
         max_steps = getattr(self.react_loop, "max_iterations", 5)
         accumulated_text = ""
         last_tool_name = None
+        last_tool_res: Optional[AgentExecutionResult] = None
 
         while step_count < max_steps:
             step_count += 1
@@ -1127,11 +1160,12 @@ class IRISOrchestrator:
                     if delta.content:
                         text_buffer += delta.content
                         accumulated_text += delta.content
-                        yield StreamChunkPayload(
-                            chunk_type="text_delta",
-                            delta_text=delta.content,
-                            session_id=session_id
-                        )
+                        if not text_buffer.strip().startswith("{") and not text_buffer.strip().startswith("```"):
+                            yield StreamChunkPayload(
+                                chunk_type="text_delta",
+                                delta_text=delta.content,
+                                session_id=session_id
+                            )
                     if delta.tool_calls:
                         for call in delta.tool_calls:
                             if hasattr(call, "id") and call.id:
@@ -1160,6 +1194,31 @@ class IRISOrchestrator:
                     session_id=session_id
                 )
                 return
+
+            if not tool_name and text_buffer.strip():
+                clean_buf = text_buffer.strip()
+                if "```json" in clean_buf:
+                    clean_buf = clean_buf.split("```json", 1)[1].split("```", 1)[0].strip()
+                elif "```" in clean_buf:
+                    clean_buf = clean_buf.split("```", 1)[1].split("```", 1)[0].strip()
+                if clean_buf.startswith("{") and clean_buf.endswith("}"):
+                    try:
+                        parsed_call = json.loads(clean_buf)
+                        if isinstance(parsed_call, dict) and any(k in parsed_call for k in ("name", "tool", "tool_name")):
+                            tool_name = parsed_call.get("name") or parsed_call.get("tool") or parsed_call.get("tool_name")
+                            raw_args = json.dumps(parsed_call.get("arguments", parsed_call.get("args", {})))
+                            accumulated_text = ""
+                            text_buffer = ""
+                    except Exception:
+                        pass
+
+            if not tool_name and text_buffer.strip():
+                if text_buffer.strip().startswith("{") or text_buffer.strip().startswith("```"):
+                    yield StreamChunkPayload(
+                        chunk_type="text_delta",
+                        delta_text=text_buffer,
+                        session_id=session_id
+                    )
 
             if tool_name:
                 last_tool_name = tool_name
@@ -1194,6 +1253,7 @@ class IRISOrchestrator:
                     )
                     tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
                     res = self._format_tool_result(tool_name, tool_result)
+                    last_tool_res = res
 
                     yield StreamChunkPayload(
                         chunk_type="tool_result",
@@ -1249,6 +1309,9 @@ class IRISOrchestrator:
                             )
                         except Exception:
                             pass
+
+                    if tool_name == "BrowserTool" and res.output_payload and res.output_payload.get("opened_on_desktop"):
+                        break
                 except Exception as e:
                     logger.error(f"Tool execution streaming error: {e}")
                     messages.append({
@@ -1262,6 +1325,18 @@ class IRISOrchestrator:
         # Save final turn and yield completion chunk
         total_duration_ms = (time.perf_counter() - start_time) * 1000.0
         final_text = accumulated_text.strip()
+        if not final_text and last_tool_name:
+            if last_tool_res and last_tool_res.output_payload and "message" in last_tool_res.output_payload:
+                final_text = str(last_tool_res.output_payload["message"])
+            elif "Browser" in last_tool_name:
+                final_text = "I have opened the website on your laptop."
+            else:
+                final_text = f"Action {last_tool_name} completed."
+            yield StreamChunkPayload(
+                chunk_type="text_delta",
+                delta_text=final_text,
+                session_id=session_id
+            )
         self.session_memory.add_message(session_id, "user", user_prompt)
         self.session_memory.add_message(session_id, "assistant", final_text)
 

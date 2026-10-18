@@ -1,0 +1,78 @@
+{
+  "timestamp": "2026-10-18T06:18:49.715920+00:00",
+  "model_name": "qwen2.5:7b-instruct",
+  "total_cases": 4,
+  "passed_cases": 1,
+  "failed_cases": 3,
+  "accuracy_pct": 25.0,
+  "tool_accuracy_pct": 100.0,
+  "param_fidelity_pct": 50.0,
+  "security_adherence_pct": 100.0,
+  "avg_latency_ms": 108607.28,
+  "regressions": [],
+  "results": [
+    {
+      "case_id": "smart_home_lights",
+      "tool_called": "HomeAssistantTool",
+      "actual_params": {},
+      "tool_selection_correct": true,
+      "params_matched": false,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": false,
+      "latency_ms": 155012.05430000118,
+      "passed": false,
+      "status": "DENIED",
+      "output_summary": "",
+      "error": null
+    },
+    {
+      "case_id": "system_terminal_echo",
+      "tool_called": "SystemCommandTool",
+      "actual_params": {
+        "command": "echo hello",
+        "action_type": "terminal"
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 14.132999996945728,
+      "passed": true,
+      "status": "PLAN_PREVIEW_REQUIRED",
+      "output_summary": "Execution plan for: Create an execution plan to echo hello and dir",
+      "error": null
+    },
+    {
+      "case_id": "browser_navigation",
+      "tool_called": "BrowserTool",
+      "actual_params": {},
+      "tool_selection_correct": true,
+      "params_matched": false,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": false,
+      "latency_ms": 139051.10140000033,
+      "passed": false,
+      "status": "COMPLETED",
+      "output_summary": "",
+      "error": null
+    },
+    {
+      "case_id": "operator_workspace_diagnosis",
+      "tool_called": "ProjectOperatorTool",
+      "actual_params": {
+        "action": "diagnose",
+        "project_name": "current"
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": false,
+      "latency_ms": 140351.82840000198,
+      "passed": false,
+      "status": "CONFIRMATION_REQUIRED",
+      "output_summary": "",
+      "error": null
+    }
+  ],
+  "report_file_path": "data\\eval_reports\\benchmark_20261018_061849.json"
+}

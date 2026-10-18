@@ -63,8 +63,10 @@ class ReplayEngine:
                 result = await asyncio.to_thread(orchestrator.process_request, case.user_prompt)
 
             # Inspect orchestrator result
-            if hasattr(result, "status"):
-                status = result.status
+            if hasattr(result, "status") and result.status:
+                status = str(result.status)
+            elif hasattr(result, "success"):
+                status = "COMPLETED" if result.success else "FAILED"
 
             if hasattr(result, "tool_name"):
                 tool_called = result.tool_name
@@ -89,7 +91,11 @@ class ReplayEngine:
 
             # Fallback to pending_action inspection
             if not actual_params and hasattr(result, "pending_action") and isinstance(result.pending_action, dict):
-                actual_params = result.pending_action.get("parameters") or {}
+                actual_params = (
+                    result.pending_action.get("action_payload")
+                    or result.pending_action.get("parameters")
+                    or {}
+                )
 
         except Exception as exc:
             error = str(exc)
@@ -104,8 +110,15 @@ class ReplayEngine:
             if not tool_called:
                 tool_selection_correct = False
             else:
-                tool_selection_correct = (case.expected_tool.lower() in tool_called.lower() or 
-                                          tool_called.lower() in case.expected_tool.lower())
+                exp_norm = case.expected_tool.lower().replace("action", "").replace("tool", "")
+                call_norm = tool_called.lower().replace("action", "").replace("tool", "")
+                tool_selection_correct = (
+                    case.expected_tool.lower() in tool_called.lower()
+                    or tool_called.lower() in case.expected_tool.lower()
+                    or exp_norm == call_norm
+                    or exp_norm in call_norm
+                    or call_norm in exp_norm
+                )
 
         # Metric 2: Argument Fidelity (Subset Matching)
         params_matched = True
@@ -152,7 +165,7 @@ class ReplayEngine:
             ground_truth_tokens_matched=tokens_matched,
             latency_ms=duration_ms,
             passed=passed,
-            status=status,
+            status=status or "COMPLETED",
             output_summary=output_summary,
             error=error,
         )

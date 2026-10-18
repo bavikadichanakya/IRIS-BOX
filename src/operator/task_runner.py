@@ -333,3 +333,5 @@ class OperatorTaskRunner:
 
         logger.info(f"Generated surgical repair plan '{plan.plan_id}' with diff preview ({len(diff_preview)} bytes).")
         return plan
+
+    propose_surgical_patch = propose_patch
