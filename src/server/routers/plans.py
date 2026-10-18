@@ -46,6 +46,19 @@ async def list_active_plans(request: Request):
     }
 
 
+@router.get("/pending")
+async def list_pending_plans(request: Request):
+    """
+    List pending staged or approved cryptographic execution plans.
+    """
+    pm = get_plan_manager(request)
+    pending_plans = [p for p in pm.list_active_plans() if p.status in (PlanStatus.STAGED, PlanStatus.APPROVED)]
+    return {
+        "plans": [p.model_dump() for p in pending_plans],
+        "count": len(pending_plans),
+    }
+
+
 @router.get("/{plan_id}")
 async def get_plan_details(plan_id: str, request: Request):
     """
