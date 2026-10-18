@@ -140,3 +140,63 @@ class OperatorSummarizer:
             daemon_suffix = " daemon" if clean_name.lower() in ("ollama", "docker") else ""
             return f"{display_name}{daemon_suffix} is not running."
 
+    @staticmethod
+    def summarize_app_launch(app_name: str, success: bool, details: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Produce a natural voice summary for application launching.
+        Example: "Launched Spotify." or "Could not find application matching 'Spotify'."
+        """
+        display_name = app_name.strip()
+        if display_name.lower() in ("vs code", "vscode", "code"):
+            display_name = "Visual Studio Code"
+        elif display_name.lower() in ("chrome", "google chrome"):
+            display_name = "Google Chrome"
+        else:
+            display_name = display_name.capitalize()
+
+        if success:
+            return f"Launched {display_name}."
+        else:
+            return f"Could not find application matching '{app_name}'."
+
+    @staticmethod
+    def summarize_window_focus(target: str, success: bool, window_title: Optional[str] = None) -> str:
+        """
+        Produce a natural voice summary for window focus switching.
+        Example: "Switched to Visual Studio Code." or "Could not find a window matching 'Slack'."
+        """
+        name = window_title or target
+        if success:
+            return f"Switched to {name}."
+        else:
+            return f"Could not find a window matching '{target}'."
+
+    @staticmethod
+    def summarize_window_state(target: str, state: str, success: bool) -> str:
+        """
+        Produce a natural voice summary for window state changes (maximize, minimize, restore).
+        Example: "Maximized Visual Studio Code." or "Minimized Spotify."
+        """
+        action_verb = {
+            "maximize": "Maximized",
+            "minimize": "Minimized",
+            "restore": "Restored",
+        }.get(state.lower(), state.capitalize())
+
+        if success:
+            return f"{action_verb} {target}."
+        else:
+            return f"Failed to {state} window '{target}'."
+
+    @staticmethod
+    def summarize_window_close(target: str, success: bool) -> str:
+        """
+        Produce a natural voice summary for window closing.
+        Example: "Closed Visual Studio Code."
+        """
+        if success:
+            return f"Closed {target}."
+        else:
+            return f"Could not close window matching '{target}'."
+
+

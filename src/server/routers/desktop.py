@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.operator.desktop import DesktopEnvironment
+from src.operator.app_launcher import AppLauncher
+from src.operator.window_manager import WindowManager
 
 logger = logging.getLogger("iris.server.routers.desktop")
 
@@ -16,7 +18,23 @@ class ProcessKillPayload(BaseModel):
 
 
 class WindowFocusPayload(BaseModel):
-    hwnd: int = Field(..., description="Window handle (HWND) to focus")
+    hwnd: Optional[int] = Field(None, description="Window handle (HWND) to focus")
+    query: Optional[str] = Field(None, description="Window title or process name substring to focus")
+
+
+class AppLaunchPayload(BaseModel):
+    app_name: str = Field(..., description="Name of application to launch (e.g. notepad, chrome, code)")
+
+
+class WindowQueryPayload(BaseModel):
+    query: Optional[str] = Field(None, description="Window title or process name to match")
+    hwnd: Optional[int] = Field(None, description="Window handle (HWND)")
+
+
+class WindowStatePayload(BaseModel):
+    query: Optional[str] = Field(None, description="Window title or process name to match")
+    hwnd: Optional[int] = Field(None, description="Window handle (HWND)")
+    state: str = Field("maximize", description="Target window state: 'maximize', 'minimize', or 'restore'")
 
 
 @router.get("/metrics")
@@ -99,26 +117,118 @@ async def get_visible_windows():
         )
 
 
-@router.post("/focus")
-async def focus_window(payload: WindowFocusPayload):
+@router.post("/apps/launch")
+async def launch_application(payload: AppLaunchPayload):
     """
-    Switch active focus to the specified application window.
+    Launch target application cleanly detached from current Python process.
     """
     try:
-        focused = DesktopEnvironment.focus_window(payload.hwnd)
+        res = AppLauncher.launch_app(payload.app_name)
+        return {"status": "SUCCESS", "app_name": payload.app_name, "result": res}
+    except FileNotFoundError as fnf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(fnf),
+        )
+    except Exception as exc:
+        logger.error(f"Failed to launch app '{payload.app_name}': {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to launch application: {str(exc)}",
+        )
+
+
+@router.post("/windows/focus")
+async def focus_window_advanced(payload: WindowFocusPayload):
+    """
+    Switch active focus to the specified application window by HWND or title query.
+    """
+    target = payload.hwnd or payload.query
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing 'query' or 'hwnd' parameter.",
+        )
+    try:
+        focused = WindowManager.focus_window(target)
         if not focused:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Window with HWND {payload.hwnd} could not be focused.",
+                detail=f"Window matching '{target}' could not be focused.",
             )
-        return {"status": "SUCCESS", "hwnd": payload.hwnd}
+        matched = WindowManager.find_window(target)
+        return {"status": "SUCCESS", "target": target, "window": matched}
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"Failed to focus window {payload.hwnd}: {exc}", exc_info=True)
+        logger.error(f"Failed to focus window '{target}': {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to focus window: {str(exc)}",
+        )
+
+
+@router.post("/focus")
+async def focus_window_legacy(payload: WindowFocusPayload):
+    """Legacy focus endpoint for HWND focus."""
+    return await focus_window_advanced(payload)
+
+
+@router.post("/windows/state")
+async def set_window_state(payload: WindowStatePayload):
+    """
+    Change window state: 'maximize', 'minimize', or 'restore'.
+    """
+    target = payload.hwnd or payload.query
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing 'query' or 'hwnd' parameter.",
+        )
+    try:
+        ok = WindowManager.set_window_state(target, payload.state)
+        if not ok:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Window matching '{target}' could not be found or updated.",
+            )
+        return {"status": "SUCCESS", "target": target, "state": payload.state}
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to set window state for '{target}': {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to set window state: {str(exc)}",
+        )
+
+
+@router.post("/windows/close")
+async def close_window(payload: WindowQueryPayload):
+    """
+    Gracefully request window close with system blacklist protection.
+    """
+    target = payload.hwnd or payload.query
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing 'query' or 'hwnd' parameter.",
+        )
+    try:
+        ok = WindowManager.close_window(target)
+        return {"status": "CLOSED", "target": target, "success": ok}
+    except LookupError as le:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(le))
+    except PermissionError as pe:
+        logger.warning(f"Security rejection on close_window '{target}': {pe}")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+    except Exception as exc:
+        logger.error(f"Failed to close window '{target}': {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to close window: {str(exc)}",
         )
 
 

@@ -15,6 +15,7 @@ from src.models.schemas import (
     BrowserAction,
     ProjectOperatorAction,
     DesktopAction,
+    WindowAutomationAction,
     AgentExecutionResult,
 )
 
@@ -805,5 +806,149 @@ class DesktopIntelligenceTool(BaseTool):
 
 
 ToolRegistry._tool_classes["DesktopTool"] = DesktopIntelligenceTool
+
+
+@ToolRegistry.register_tool("WindowAutomationTool")
+class WindowAutomationTool(BaseTool):
+    """
+    Multi-window application automation and window focus controller.
+    Launches applications, switches window focus, manipulates window states (maximize, minimize, restore),
+    and gracefully closes windows with security boundary protection.
+    """
+    category = "desktop"
+
+    def execute(self, action_payload: WindowAutomationAction) -> AgentExecutionResult:
+        from src.operator.app_launcher import AppLauncher
+        from src.operator.window_manager import WindowManager
+        from src.operator.summarizer import OperatorSummarizer
+
+        action = action_payload.action or "focus_window"
+
+        try:
+            if action in ("launch_app", "launch", "open_app", "start_app"):
+                app_name = action_payload.app_name or action_payload.query
+                if not app_name:
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="WindowAutomationTool",
+                        error="Missing 'app_name' parameter for launch_app.",
+                        output_payload={"status": "MISSING_APP_NAME"},
+                    )
+                res = AppLauncher.launch_app(app_name)
+                voice_msg = OperatorSummarizer.summarize_app_launch(app_name, True, res)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="WindowAutomationTool",
+                    output_payload={
+                        "status": "LAUNCHED",
+                        "app_name": app_name,
+                        "result": res,
+                        "voice_confirmation": voice_msg,
+                    },
+                )
+
+            elif action in ("focus_window", "focus", "switch_window", "switch_to"):
+                target = action_payload.query or action_payload.hwnd or action_payload.app_name
+                if target is None:
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="WindowAutomationTool",
+                        error="Missing target 'query' or 'hwnd' parameter.",
+                        output_payload={"status": "MISSING_TARGET"},
+                    )
+                matched = WindowManager.find_window(target)
+                win_title = matched.get("title") if matched else str(target)
+                ok = WindowManager.focus_window(target)
+                voice_msg = OperatorSummarizer.summarize_window_focus(str(target), ok, win_title)
+                return AgentExecutionResult(
+                    success=ok,
+                    tool_name="WindowAutomationTool",
+                    output_payload={
+                        "status": "WINDOW_FOCUSED" if ok else "NOT_FOUND",
+                        "target": target,
+                        "window": matched,
+                        "focused": ok,
+                        "voice_confirmation": voice_msg,
+                    },
+                    error=None if ok else f"Could not find or focus window matching '{target}'.",
+                )
+
+            elif action in ("set_window_state", "window_state", "state"):
+                target = action_payload.query or action_payload.hwnd or action_payload.app_name
+                state = action_payload.state or "maximize"
+                if target is None:
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="WindowAutomationTool",
+                        error="Missing target 'query' or 'hwnd' parameter.",
+                        output_payload={"status": "MISSING_TARGET"},
+                    )
+                matched = WindowManager.find_window(target)
+                win_title = matched.get("title") if matched else str(target)
+                ok = WindowManager.set_window_state(target, state)
+                voice_msg = OperatorSummarizer.summarize_window_state(win_title, state, ok)
+                return AgentExecutionResult(
+                    success=ok,
+                    tool_name="WindowAutomationTool",
+                    output_payload={
+                        "status": "STATE_UPDATED" if ok else "FAILED",
+                        "target": target,
+                        "state": state,
+                        "window": matched,
+                        "voice_confirmation": voice_msg,
+                    },
+                    error=None if ok else f"Failed to {state} window '{target}'.",
+                )
+
+            elif action in ("close_window", "close"):
+                target = action_payload.query or action_payload.hwnd or action_payload.app_name
+                if target is None:
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="WindowAutomationTool",
+                        error="Missing target 'query' or 'hwnd' parameter.",
+                        output_payload={"status": "MISSING_TARGET"},
+                    )
+                matched = WindowManager.find_window(target)
+                win_title = matched.get("title") if matched else str(target)
+                ok = WindowManager.close_window(target)
+                voice_msg = OperatorSummarizer.summarize_window_close(win_title, ok)
+                return AgentExecutionResult(
+                    success=ok,
+                    tool_name="WindowAutomationTool",
+                    output_payload={
+                        "status": "CLOSED" if ok else "CLOSE_FAILED",
+                        "target": target,
+                        "window_title": win_title,
+                        "voice_confirmation": voice_msg,
+                    },
+                )
+
+            else:
+                return AgentExecutionResult(
+                    success=False,
+                    tool_name="WindowAutomationTool",
+                    error=f"Unknown window automation action: {action}",
+                    output_payload={"status": "UNKNOWN_ACTION"},
+                )
+
+        except PermissionError as pe:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="WindowAutomationTool",
+                error=str(pe),
+                output_payload={"status": "SECURITY_DENIED"},
+            )
+        except Exception as e:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="WindowAutomationTool",
+                error=f"Window automation tool error: {str(e)}",
+                output_payload={"status": "ERROR"},
+            )
+
+
+ToolRegistry._tool_classes["WindowTool"] = WindowAutomationTool
+
 
 

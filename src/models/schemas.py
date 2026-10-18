@@ -66,6 +66,17 @@ class DesktopAction(BaseModel):
     hwnd: Optional[int] = Field(None, description="Window handle to focus")
 
 
+class WindowAutomationAction(BaseModel):
+    """
+    Schema for Multi-Window Application Automation & Window Focus Control.
+    """
+    action: str = Field("focus_window", description="Action: launch_app, focus_window, set_window_state, close_window")
+    app_name: Optional[str] = Field(None, description="Name of application to launch (e.g. chrome, code, spotify, notepad)")
+    query: Optional[str] = Field(None, description="Window title, process name, or query to match window")
+    hwnd: Optional[int] = Field(None, description="Window handle (HWND)")
+    state: Optional[str] = Field(None, description="Target window state: 'maximize', 'minimize', or 'restore'")
+
+
 class VoiceCommandPayload(BaseModel):
     """
     Schema for a voice command payload.
