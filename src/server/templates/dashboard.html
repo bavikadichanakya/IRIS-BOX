@@ -116,6 +116,77 @@
       </div>
     </section>
 
+    <!-- System Telemetry & Desktop HUD -->
+    <section class="card-panel">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--cyan-neon)" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          System Telemetry &amp; Desktop HUD
+        </h2>
+        <span class="section-badge" id="desktop-battery-badge">AC Power</span>
+      </div>
+
+      <div class="desktop-hud-grid">
+        <!-- CPU Progress Bar -->
+        <div class="hud-metric-card">
+          <div class="hud-metric-header">
+            <span class="hud-metric-label">CPU Utilization</span>
+            <span class="hud-metric-value" id="hud-cpu-val">0%</span>
+          </div>
+          <div class="hud-progress-track">
+            <div class="hud-progress-bar" id="hud-cpu-bar" style="width: 0%; background: linear-gradient(90deg, var(--cyan-neon), var(--indigo-neon));"></div>
+          </div>
+        </div>
+
+        <!-- RAM Progress Bar -->
+        <div class="hud-metric-card">
+          <div class="hud-metric-header">
+            <span class="hud-metric-label">RAM Utilization</span>
+            <span class="hud-metric-value" id="hud-ram-val">0% (0 / 0 GB)</span>
+          </div>
+          <div class="hud-progress-track">
+            <div class="hud-progress-bar" id="hud-ram-bar" style="width: 0%; background: linear-gradient(90deg, var(--emerald-neon), var(--cyan-neon));"></div>
+          </div>
+        </div>
+
+        <!-- Disk Progress Bar -->
+        <div class="hud-metric-card">
+          <div class="hud-metric-header">
+            <span class="hud-metric-label">Primary Disk</span>
+            <span class="hud-metric-value" id="hud-disk-val">0% (0 / 0 GB)</span>
+          </div>
+          <div class="hud-progress-track">
+            <div class="hud-progress-bar" id="hud-disk-bar" style="width: 0%; background: linear-gradient(90deg, var(--indigo-neon), var(--amber-neon));"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Developer Service Badges -->
+      <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Developer Daemons:</span>
+          <div class="service-health-badge" id="service-docker-badge">
+            <span class="status-dot"></span> Docker
+          </div>
+          <div class="service-health-badge" id="service-ollama-badge">
+            <span class="status-dot"></span> Ollama
+          </div>
+          <div class="service-health-badge" id="service-wsl-badge">
+            <span class="status-dot"></span> WSL2
+          </div>
+        </div>
+
+        <!-- Top Consumer Quick Pill -->
+        <div id="hud-top-consumer" style="font-size: 0.78rem; color: var(--text-secondary); font-family: var(--font-mono);">
+          Loading top consumers...
+        </div>
+      </div>
+    </section>
+
     <!-- 2. Subsystem Matrix -->
     <section>
       <div class="section-header">

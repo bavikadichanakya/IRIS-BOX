@@ -28,6 +28,7 @@ from src.server.fleet import FleetManager, router as fleet_router
 from src.server.routers.memory import router as memory_router
 from src.server.routers.plans import router as plans_router
 from src.server.routers.operator import router as operator_router
+from src.server.routers.desktop import router as desktop_router
 from src.server.routers.skills import router as skills_router
 from src.server.routers.dashboard import router as dashboard_router
 from src.server.routers.automation import router as automation_router
@@ -215,6 +216,10 @@ app.include_router(plans_router, prefix="/api", dependencies=[Depends(verify_api
 # Protected Project Operator API endpoints requiring authentication
 app.include_router(operator_router, dependencies=[Depends(verify_api_key)])
 app.include_router(operator_router, prefix="/api", dependencies=[Depends(verify_api_key)])
+
+# Protected Desktop Intelligence API endpoints requiring authentication
+app.include_router(desktop_router, dependencies=[Depends(verify_api_key)])
+app.include_router(desktop_router, prefix="/api", dependencies=[Depends(verify_api_key)])
 
 # Protected Skills & Plugins API endpoints requiring authentication
 app.include_router(skills_router, dependencies=[Depends(verify_api_key)])

@@ -777,6 +777,83 @@
   }
 
   // Initialization
+  // Desktop Intelligence Telemetry & Services
+  async function fetchDesktopTelemetry() {
+    try {
+      // 1. Fetch Metrics
+      const res = await apiFetch("/api/desktop/metrics");
+      if (res.ok) {
+        const metrics = await res.json();
+        const cpuBar = document.getElementById("hud-cpu-bar");
+        const cpuVal = document.getElementById("hud-cpu-val");
+        const ramBar = document.getElementById("hud-ram-bar");
+        const ramVal = document.getElementById("hud-ram-val");
+        const diskBar = document.getElementById("hud-disk-bar");
+        const diskVal = document.getElementById("hud-disk-val");
+        const battBadge = document.getElementById("desktop-battery-badge");
+
+        if (cpuBar && cpuVal) {
+          const cpuPct = metrics.cpu_percent ?? 0;
+          cpuBar.style.width = `${Math.min(100, Math.max(0, cpuPct))}%`;
+          cpuVal.textContent = `${cpuPct}%`;
+        }
+
+        if (ramBar && ramVal) {
+          const ramPct = metrics.memory_percent ?? 0;
+          ramBar.style.width = `${Math.min(100, Math.max(0, ramPct))}%`;
+          ramVal.textContent = `${ramPct}% (${metrics.used_ram_gb ?? 0} / ${metrics.total_ram_gb ?? 0} GB)`;
+        }
+
+        if (diskBar && diskVal) {
+          const diskPct = metrics.disk_percent ?? 0;
+          diskBar.style.width = `${Math.min(100, Math.max(0, diskPct))}%`;
+          diskVal.textContent = `${diskPct}% (${metrics.disk_used_gb ?? 0} / ${metrics.disk_total_gb ?? 0} GB)`;
+        }
+
+        if (battBadge) {
+          if (metrics.battery_percent !== null && metrics.battery_percent !== undefined) {
+            battBadge.textContent = metrics.power_plugged ? `AC Power (${metrics.battery_percent}%)` : `Battery ${metrics.battery_percent}%`;
+          } else {
+            battBadge.textContent = "AC Power";
+          }
+        }
+      }
+
+      // 2. Fetch Developer Services
+      const svcRes = await apiFetch("/api/desktop/services");
+      if (svcRes.ok) {
+        const svcs = await svcRes.json();
+        updateServiceBadge("service-docker-badge", svcs.docker?.running);
+        updateServiceBadge("service-ollama-badge", svcs.ollama?.running);
+        updateServiceBadge("service-wsl-badge", svcs.wsl?.running);
+      }
+
+      // 3. Top Process Quick Info
+      const procRes = await apiFetch("/api/desktop/processes?limit=2&sort_by=cpu");
+      const topConsumerEl = document.getElementById("hud-top-consumer");
+      if (procRes && procRes.ok && topConsumerEl) {
+        const pData = await procRes.json();
+        const procs = pData.processes || [];
+        if (procs.length > 0) {
+          const top = procs[0];
+          topConsumerEl.textContent = `Top Consumer: ${top.name} (PID ${top.pid}) • ${top.cpu_percent}% CPU, ${top.memory_mb} MB`;
+        }
+      }
+    } catch (e) {
+      console.debug("Desktop telemetry fetch error:", e);
+    }
+  }
+
+  function updateServiceBadge(elementId, isRunning) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    if (isRunning) {
+      el.className = "service-health-badge running";
+    } else {
+      el.className = "service-health-badge stopped";
+    }
+  }
+
   async function init() {
     // 1. Setup Token Field
     const savedToken = getStoredToken();
@@ -826,12 +903,14 @@
     if (pollInterval) clearInterval(pollInterval);
     pollInterval = setInterval(async () => {
       await fetchStatusAndTelemetry();
+      await fetchDesktopTelemetry();
       await fetchPlans();
     }, 3500);
   }
 
   async function refreshAll() {
     await fetchStatusAndTelemetry();
+    await fetchDesktopTelemetry();
     await fetchPlans();
     await fetchSkills();
     await fetchPreferences();
@@ -840,3 +919,4 @@
 
   document.addEventListener("DOMContentLoaded", init);
 })();
+

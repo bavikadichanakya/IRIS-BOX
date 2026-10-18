@@ -53,6 +53,19 @@ class ProjectOperatorAction(BaseModel):
     command: Optional[str] = None
     timeout_sec: int = 30
 
+
+class DesktopAction(BaseModel):
+    """
+    Schema for a Desktop Intelligence action (telemetry, processes, services, windows, kill).
+    """
+    action: str = Field("get_system_metrics", description="Action to perform: get_system_metrics, get_top_processes, check_service, get_visible_windows, focus_window, kill_process")
+    sort_by: str = Field("cpu", description="Sort by 'cpu' or 'memory'")
+    limit: int = Field(5, description="Number of items to return")
+    service_name: Optional[str] = Field(None, description="Name of service to inspect (e.g. docker, ollama, wsl, postgres, redis)")
+    pid: Optional[int] = Field(None, description="Process ID to terminate")
+    hwnd: Optional[int] = Field(None, description="Window handle to focus")
+
+
 class VoiceCommandPayload(BaseModel):
     """
     Schema for a voice command payload.

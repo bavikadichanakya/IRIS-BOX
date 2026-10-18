@@ -6,6 +6,7 @@ from src.operator.workspace import ProjectWorkspace, ProjectSnapshot
 from src.operator.task_runner import OperatorTaskRunner, DiagnosticReport
 from src.operator.resolver import WorkspaceResolver, parse_window_title
 from src.operator.summarizer import OperatorSummarizer
+from src.operator.desktop import DesktopEnvironment
 
 __all__ = [
     "ProjectWorkspace",
@@ -15,4 +16,6 @@ __all__ = [
     "WorkspaceResolver",
     "parse_window_title",
     "OperatorSummarizer",
+    "DesktopEnvironment",
 ]
+

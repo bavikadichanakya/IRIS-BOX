@@ -985,3 +985,96 @@ body {
   box-shadow: 0 0 12px var(--amber-glow);
 }
 
+/* Desktop Intelligence & System HUD */
+.desktop-hud-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.hud-metric-card {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hud-metric-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hud-metric-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.hud-metric-value {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.hud-progress-track {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.hud-progress-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease-out;
+}
+
+/* Developer Service Health Badges */
+.service-health-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 600;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+}
+
+.service-health-badge .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.service-health-badge.running {
+  background: var(--emerald-glow);
+  color: var(--emerald-neon);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.service-health-badge.running .status-dot {
+  background: var(--emerald-neon);
+  box-shadow: 0 0 6px var(--emerald-neon);
+}
+
+.service-health-badge.stopped {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+

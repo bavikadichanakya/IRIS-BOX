@@ -14,6 +14,7 @@ from src.models.schemas import (
     LaptopSystemAction,
     BrowserAction,
     ProjectOperatorAction,
+    DesktopAction,
     AgentExecutionResult,
 )
 
@@ -669,4 +670,140 @@ class ProjectOperatorTool(BaseTool):
 
 
 ToolRegistry._tool_classes["OperatorTool"] = ProjectOperatorTool
+
+
+@ToolRegistry.register_tool("DesktopIntelligenceTool")
+class DesktopIntelligenceTool(BaseTool):
+    """
+    Desktop environment and process intelligence tool.
+    Inspects system telemetry (CPU, RAM, disk, battery), top resource-consuming processes,
+    developer services (Docker, Ollama, WSL, Postgres, Redis), open desktop windows, and terminates processes safely.
+    """
+    category = "desktop"
+
+    def execute(self, action_payload: DesktopAction) -> AgentExecutionResult:
+        from src.operator.desktop import DesktopEnvironment
+        from src.operator.summarizer import OperatorSummarizer
+
+        action = action_payload.action or "get_system_metrics"
+
+        try:
+            if action in ("get_system_metrics", "metrics", "telemetry"):
+                metrics = DesktopEnvironment.get_system_metrics()
+                voice_msg = OperatorSummarizer.summarize_system_health(metrics)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="DesktopIntelligenceTool",
+                    output_payload={
+                        "status": "TELEMETRY_SUCCESS",
+                        "metrics": metrics,
+                        "voice_confirmation": voice_msg,
+                    },
+                )
+
+            elif action in ("get_top_processes", "top_processes", "processes"):
+                sort_by = action_payload.sort_by or "cpu"
+                limit = action_payload.limit or 5
+                procs = DesktopEnvironment.get_top_processes(limit=limit, sort_by=sort_by)
+                voice_msg = OperatorSummarizer.summarize_top_consumers(procs, resource_type=sort_by)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="DesktopIntelligenceTool",
+                    output_payload={
+                        "status": "PROCESSES_RETRIEVED",
+                        "sort_by": sort_by,
+                        "limit": limit,
+                        "processes": procs,
+                        "voice_confirmation": voice_msg,
+                    },
+                )
+
+            elif action in ("check_service", "inspect_service", "service"):
+                sname = action_payload.service_name or "docker"
+                info = DesktopEnvironment.inspect_service(sname)
+                voice_msg = OperatorSummarizer.summarize_service_status(sname, info["running"], info)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="DesktopIntelligenceTool",
+                    output_payload={
+                        "status": "SERVICE_INSPECTED",
+                        "service_name": sname,
+                        "service": info,
+                        "voice_confirmation": voice_msg,
+                    },
+                )
+
+            elif action in ("get_visible_windows", "windows", "list_windows"):
+                windows = DesktopEnvironment.get_visible_windows()
+                voice_msg = f"Found {len(windows)} open application windows."
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="DesktopIntelligenceTool",
+                    output_payload={
+                        "status": "WINDOWS_RETRIEVED",
+                        "windows": windows,
+                        "count": len(windows),
+                        "voice_confirmation": voice_msg,
+                    },
+                )
+
+            elif action in ("focus_window", "focus"):
+                hwnd = action_payload.hwnd
+                if not hwnd:
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="DesktopIntelligenceTool",
+                        error="Missing 'hwnd' parameter for focus_window.",
+                        output_payload={"status": "MISSING_HWND"},
+                    )
+                ok = DesktopEnvironment.focus_window(hwnd)
+                return AgentExecutionResult(
+                    success=ok,
+                    tool_name="DesktopIntelligenceTool",
+                    output_payload={"status": "WINDOW_FOCUSED" if ok else "FOCUS_FAILED", "hwnd": hwnd},
+                    error=None if ok else f"Failed to focus window {hwnd}",
+                )
+
+            elif action in ("kill_process", "kill", "terminate_process"):
+                pid = action_payload.pid
+                if pid is None:
+                    return AgentExecutionResult(
+                        success=False,
+                        tool_name="DesktopIntelligenceTool",
+                        error="Missing 'pid' parameter for kill_process.",
+                        output_payload={"status": "MISSING_PID"},
+                    )
+                DesktopEnvironment.kill_process(pid)
+                return AgentExecutionResult(
+                    success=True,
+                    tool_name="DesktopIntelligenceTool",
+                    output_payload={"status": "TERMINATED", "pid": pid},
+                )
+
+            else:
+                return AgentExecutionResult(
+                    success=False,
+                    tool_name="DesktopIntelligenceTool",
+                    error=f"Unknown desktop action: {action}",
+                    output_payload={"status": "UNKNOWN_ACTION"},
+                )
+
+        except PermissionError as pe:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="DesktopIntelligenceTool",
+                error=str(pe),
+                output_payload={"status": "SECURITY_DENIED"},
+            )
+        except Exception as e:
+            return AgentExecutionResult(
+                success=False,
+                tool_name="DesktopIntelligenceTool",
+                error=f"Desktop tool error: {str(e)}",
+                output_payload={"status": "ERROR"},
+            )
+
+
+ToolRegistry._tool_classes["DesktopTool"] = DesktopIntelligenceTool
+
 
