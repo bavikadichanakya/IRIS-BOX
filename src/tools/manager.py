@@ -44,7 +44,7 @@ class ToolManager:
             if "System" in name or "Terminal" in name or "Shell" in name or "Operator" in name or "Patch" in name:
                 perm = PermissionLevel.SENSITIVE
                 requires_conf = True
-            elif "Home" in name or "Assistant" in name or "Device" in name:
+            elif "Home" in name or "Assistant" in name or "Device" in name or "Desktop" in name or "Window" in name:
                 perm = PermissionLevel.PROTECTED
                 requires_conf = False
             else:

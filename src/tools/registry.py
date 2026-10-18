@@ -712,6 +712,7 @@ class DesktopIntelligenceTool(BaseTool):
                     tool_name="DesktopIntelligenceTool",
                     output_payload={
                         "status": "PROCESSES_RETRIEVED",
+                        "action": action,
                         "sort_by": sort_by,
                         "limit": limit,
                         "processes": procs,
@@ -865,6 +866,8 @@ class WindowAutomationTool(BaseTool):
                     tool_name="WindowAutomationTool",
                     output_payload={
                         "status": "WINDOW_FOCUSED" if ok else "NOT_FOUND",
+                        "action": action,
+                        "query": action_payload.query or str(target),
                         "target": target,
                         "window": matched,
                         "focused": ok,

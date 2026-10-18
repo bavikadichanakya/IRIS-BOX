@@ -590,13 +590,15 @@ class IRISOrchestrator:
         tool_schemas = self._get_tool_schemas()
 
         system_content = (
-            "You are IRIS, an AI desktop and smart assistant on the user's laptop.\n"
+            "You are IRIS, an AI desktop computer operator and smart assistant on the user's laptop.\n"
             "CRITICAL RULES FOR ACTIONS:\n"
-            "1. When the user asks to open or visit a website, video, or URL (such as YouTube, Google, Reddit, etc.), "
-            "you MUST call `BrowserTool` with action='goto' and the destination url (e.g. 'https://www.youtube.com'). "
-            "NEVER claim that a website is opened without invoking `BrowserTool`.\n"
-            "2. When the user asks to run a system or terminal command, call SystemCommandTool.\n"
-            "3. Answer concisely in 1-2 sentences."
+            "1. Smart Home: When the user asks to control lights, switches, or smart devices, call `HomeAssistantTool` (e.g. action='off', domain='light').\n"
+            "2. Browser: When the user asks to open or visit a website, video, or URL, call `BrowserTool` with action='goto' and the destination url.\n"
+            "3. Terminal & Planning: When the user asks to run a system or terminal command or create an execution plan, call `SystemCommandTool`.\n"
+            "4. Project Operator: When the user asks to inspect workspaces, run tests, diagnose issues, or fix code in projects, call `ProjectOperatorTool`.\n"
+            "5. Desktop Intelligence: When the user asks to check processes, memory/RAM, CPU usage, system health, or developer services, call `DesktopIntelligenceTool` with action='get_top_processes' or 'get_system_metrics'.\n"
+            "6. Window Automation: When the user asks to switch windows, bring an app/browser to the front, or launch an app, call `WindowAutomationTool` with action='focus_window' or 'launch_app'.\n"
+            "Answer concisely in 1-2 sentences."
         )
         if self.memory_store:
             try:
@@ -799,12 +801,29 @@ class IRISOrchestrator:
                             raw_args = json.dumps(parsed_call.get("arguments", parsed_call.get("args", {})))
                     except Exception:
                         pass
+                else:
+                    import re
+                    m = re.search(r"(\w*(?:Tool|Action|Skill|Operator))\s*\(([\s\S]*?)\)", clean_buf)
+                    if m:
+                        matched_name = m.group(1).strip()
+                        args_str = m.group(2).strip()
+                        if "light" in matched_name.lower():
+                            matched_name = "HomeAssistantTool"
+                        try:
+                            json.loads(args_str)
+                            tool_name = matched_name
+                            raw_args = args_str
+                        except Exception:
+                            pass
 
             if not tool_name:
                 text_response = assistant_content.strip() or "No response generated"
                 out_payload = {}
-                if last_tool_res and last_tool_res.output_payload:
-                    out_payload.update(last_tool_res.output_payload)
+                tool_args = None
+                if last_tool_res:
+                    if last_tool_res.output_payload:
+                        out_payload.update(last_tool_res.output_payload)
+                    tool_args = getattr(last_tool_res, "tool_arguments", None)
                 if text_response:
                     out_payload["response"] = text_response
 
@@ -812,7 +831,8 @@ class IRISOrchestrator:
                     success=True,
                     tool_name=last_tool_name or "",
                     output_payload=out_payload,
-                    error=None
+                    error=None,
+                    tool_arguments=tool_args,
                 )
                 total_duration_ms = (time.perf_counter() - start_time) * 1000.0
                 if session_id:
@@ -920,6 +940,9 @@ class IRISOrchestrator:
                 )
                 tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
                 formatted_res = self._format_tool_result(tool_name, tool_result)
+                formatted_res.tool_arguments = args_dict
+                if isinstance(formatted_res.output_payload, dict):
+                    formatted_res.output_payload.setdefault("tool_arguments", args_dict)
                 last_tool_res = formatted_res
 
                 if not formatted_res.success or tool_result.status != ExecutionStatus.SUCCEEDED:

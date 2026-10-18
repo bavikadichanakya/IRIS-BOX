@@ -86,6 +86,9 @@ class BenchmarkReport(BaseModel):
     param_fidelity_pct: float
     security_adherence_pct: float
     avg_latency_ms: float
+    median_latency_ms: float = 0.0
+    mean_latency_sec: float = 0.0
+    median_latency_sec: float = 0.0
     regressions: List[str] = Field(default_factory=list)
     results: List[TaskExecutionResult] = Field(default_factory=list)
     report_file_path: Optional[str] = None

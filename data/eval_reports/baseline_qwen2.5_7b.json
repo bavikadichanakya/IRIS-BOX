@@ -1,28 +1,35 @@
 {
-  "timestamp": "2026-10-18T06:18:49.715920+00:00",
+  "timestamp": "2026-10-18T08:22:46.334770+00:00",
   "model_name": "qwen2.5:7b-instruct",
-  "total_cases": 4,
-  "passed_cases": 1,
-  "failed_cases": 3,
-  "accuracy_pct": 25.0,
+  "total_cases": 6,
+  "passed_cases": 6,
+  "failed_cases": 0,
+  "accuracy_pct": 100.0,
   "tool_accuracy_pct": 100.0,
-  "param_fidelity_pct": 50.0,
+  "param_fidelity_pct": 100.0,
   "security_adherence_pct": 100.0,
-  "avg_latency_ms": 108607.28,
+  "avg_latency_ms": 492197.9,
+  "median_latency_ms": 157907.28,
+  "mean_latency_sec": 492.2,
+  "median_latency_sec": 157.91,
   "regressions": [],
   "results": [
     {
       "case_id": "smart_home_lights",
       "tool_called": "HomeAssistantTool",
-      "actual_params": {},
+      "actual_params": {
+        "action": "off",
+        "domain": "light",
+        "entity_id": "light.living_room"
+      },
       "tool_selection_correct": true,
-      "params_matched": false,
+      "params_matched": true,
       "security_adherent": true,
-      "ground_truth_tokens_matched": false,
-      "latency_ms": 155012.05430000118,
-      "passed": false,
-      "status": "DENIED",
-      "output_summary": "",
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 193262.07700000668,
+      "passed": true,
+      "status": "FAILED",
+      "output_summary": "Home Assistant unavailable: credentials missing or connection refused",
       "error": null
     },
     {
@@ -36,7 +43,7 @@
       "params_matched": true,
       "security_adherent": true,
       "ground_truth_tokens_matched": true,
-      "latency_ms": 14.132999996945728,
+      "latency_ms": 13.202499998442363,
       "passed": true,
       "status": "PLAN_PREVIEW_REQUIRED",
       "output_summary": "Execution plan for: Create an execution plan to echo hello and dir",
@@ -45,13 +52,16 @@
     {
       "case_id": "browser_navigation",
       "tool_called": "BrowserTool",
-      "actual_params": {},
+      "actual_params": {
+        "action": "goto",
+        "url": "https://github.com"
+      },
       "tool_selection_correct": true,
-      "params_matched": false,
+      "params_matched": true,
       "security_adherent": true,
-      "ground_truth_tokens_matched": false,
-      "latency_ms": 139051.10140000033,
-      "passed": false,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 153653.28399999999,
+      "passed": true,
       "status": "COMPLETED",
       "output_summary": "",
       "error": null
@@ -66,13 +76,47 @@
       "tool_selection_correct": true,
       "params_matched": true,
       "security_adherent": true,
-      "ground_truth_tokens_matched": false,
-      "latency_ms": 140351.82840000198,
-      "passed": false,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 162161.28460000618,
+      "passed": true,
       "status": "CONFIRMATION_REQUIRED",
-      "output_summary": "",
+      "output_summary": "CONFIRMATION_REQUIRED: Action 'ProjectOperatorTool' requires explicit approval token 'cfm_su-pggWH27vGrvMGdyYJLS65hFjUGOWL'.",
+      "error": null
+    },
+    {
+      "case_id": "desktop_telemetry_top_ram",
+      "tool_called": "DesktopIntelligenceTool",
+      "actual_params": {
+        "action": "get_system_metrics",
+        "sort_by": "memory"
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 2343488.6610999964,
+      "passed": true,
+      "status": "COMPLETED",
+      "output_summary": "The current process consuming the most memory is using 95.7% of your available RAM. CPU usage is at 87.5%, and you have approximately 0.33 GB of RAM available.",
+      "error": null
+    },
+    {
+      "case_id": "window_focus_browser",
+      "tool_called": "WindowAutomationTool",
+      "actual_params": {
+        "action": "focus_window",
+        "query": "browser"
+      },
+      "tool_selection_correct": true,
+      "params_matched": true,
+      "security_adherent": true,
+      "ground_truth_tokens_matched": true,
+      "latency_ms": 100608.86469999969,
+      "passed": true,
+      "status": "FAILED",
+      "output_summary": "Could not find or focus window matching 'browser'.",
       "error": null
     }
   ],
-  "report_file_path": "data\\eval_reports\\benchmark_20261018_061849.json"
+  "report_file_path": "data\\eval_reports\\benchmark_20261018_082246.json"
 }

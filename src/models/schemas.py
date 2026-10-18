@@ -92,12 +92,13 @@ class AgentExecutionResult(BaseModel):
     """
     success: bool
     tool_name: str
-    output_payload: Dict
+    output_payload: Dict = Field(default_factory=dict)
     error: Optional[str] = None
     confirmation_token: Optional[str] = None
     pending_action: Optional[Dict] = None
     status: Optional[str] = None
     plan_id: Optional[str] = None
+    tool_arguments: Optional[Dict[str, Any]] = None
 
     def __getitem__(self, item: str) -> Any:
         if hasattr(self, item):

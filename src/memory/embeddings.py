@@ -49,17 +49,27 @@ class LocalEmbeddingEngine:
         target_path = None
         for candidate in candidates:
             if os.path.isdir(candidate):
-                # Verify that directory has files
                 files = os.listdir(candidate)
                 if any(f.endswith((".bin", ".safetensors", ".onnx", ".json")) for f in files):
                     target_path = candidate
                     break
 
+        if target_path is None:
+            self._model = None
+            self.status = "UNAVAILABLE"
+            self.is_available = False
+            self.error_message = (
+                f"Local embedding model '{self.model_name}' not found in local cache. "
+                f"Place weights in '{self.cache_dir}/{self.model_name}' for offline operation."
+            )
+            logger.info(self.error_message)
+            return
+
         try:
             from sentence_transformers import SentenceTransformer
 
             # Strict offline enforcement: local_files_only=True prevents remote network fetch
-            load_target = target_path or self.model_name
+            load_target = target_path
             self._model = SentenceTransformer(load_target, local_files_only=True)
             self.status = "LOADED"
             self.is_available = True

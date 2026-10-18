@@ -10,6 +10,7 @@ from src.eval.models import (
     BenchmarkReport,
 )
 from src.eval.replay_engine import ReplayEngine
+from src.eval.dataset import get_standard_benchmark_suite, BENCHMARK_CASES_6_DOMAINS
 
 __all__ = [
     "TaskTestCase",
@@ -17,4 +18,6 @@ __all__ = [
     "TaskExecutionResult",
     "BenchmarkReport",
     "ReplayEngine",
+    "get_standard_benchmark_suite",
+    "BENCHMARK_CASES_6_DOMAINS",
 ]

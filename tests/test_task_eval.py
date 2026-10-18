@@ -221,3 +221,88 @@ async def test_replay_engine_with_real_orchestrator():
     assert res.security_adherent is True
     assert res.params_matched is True
     assert res.passed is True
+
+
+def test_standard_benchmark_suite_6_domains():
+    """Verify that the standard benchmark dataset comprises all 6 required tool domains."""
+    from src.eval.dataset import get_standard_benchmark_suite, BENCHMARK_CASES_6_DOMAINS
+
+    cases = get_standard_benchmark_suite()
+    assert len(cases) == 6
+    assert len(BENCHMARK_CASES_6_DOMAINS) == 6
+
+    expected_tools = {
+        "HomeAssistantTool",
+        "SystemCommandTool",
+        "BrowserActionTool",
+        "ProjectOperatorTool",
+        "DesktopIntelligenceTool",
+        "WindowAutomationTool",
+    }
+    actual_tools = {c.expected_tool for c in cases}
+    assert actual_tools == expected_tools
+
+    case_ids = {c.id for c in cases}
+    assert "desktop_telemetry_top_ram" in case_ids
+    assert "window_focus_browser" in case_ids
+
+
+@pytest.mark.asyncio
+async def test_replay_engine_tool_aliases_and_tolerance():
+    """Verify ReplayEngine handles tool aliases and parameter tolerance seamlessly."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        engine = ReplayEngine(reports_dir=tmp_dir)
+
+        # Mock orchestrator responding with aliases
+        mock_orch = MagicMock()
+        mock_orch.model = "alias-tester"
+        mock_orch.process_request.side_effect = [
+            # Case 1: DesktopTool alias for DesktopIntelligenceTool
+            AgentExecutionResult(
+                success=True,
+                tool_name="DesktopTool",
+                status="COMPLETED",
+                output_payload={
+                    "status": "PROCESSES_RETRIEVED",
+                    "action": "get_top_processes",
+                    "sort_by": "memory",
+                    "tool_arguments": {"action": "get_top_processes", "sort_by": "memory"},
+                },
+            ),
+            # Case 2: WindowTool alias for WindowAutomationTool
+            AgentExecutionResult(
+                success=True,
+                tool_name="WindowTool",
+                status="COMPLETED",
+                output_payload={
+                    "status": "WINDOW_FOCUSED",
+                    "action": "focus_window",
+                    "app_name": "browser",
+                    "tool_arguments": {"action": "focus_window", "query": "browser"},
+                },
+            ),
+        ]
+
+        case1 = TaskTestCase(
+            id="dt_1",
+            user_prompt="Check RAM usage",
+            expected_tool="DesktopIntelligenceTool",
+            expected_params_subset={"action": "get_top_processes", "sort_by": "memory"},
+            min_permission_level=PermissionLevel.PROTECTED,
+        )
+        case2 = TaskTestCase(
+            id="wt_1",
+            user_prompt="Switch to browser",
+            expected_tool="WindowAutomationTool",
+            expected_params_subset={"action": "focus_window", "query": "browser"},
+            min_permission_level=PermissionLevel.PROTECTED,
+        )
+
+        report = await engine.run_suite([case1, case2], mock_orch)
+        assert report.total_cases == 2
+        assert report.passed_cases == 2
+        assert report.tool_accuracy_pct == 100.0
+        assert report.param_fidelity_pct == 100.0
+        assert report.security_adherence_pct == 100.0
+        assert report.mean_latency_sec >= 0.0
+        assert report.median_latency_sec >= 0.0
