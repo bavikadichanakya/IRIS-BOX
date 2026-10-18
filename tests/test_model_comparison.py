@@ -165,3 +165,39 @@ def test_comparator_loads_from_file_and_persists(tmp_path: Path, baseline_report
         loaded = json.load(f)
     assert loaded["passed_promotion_gate"] is True
     assert loaded["recommendation"] == "PROMOTE_CANDIDATE"
+
+
+def test_orchestrator_parses_double_braced_tool_calls():
+    """Verify that orchestrator properly parses double-braced and escaped tool call outputs."""
+    from src.agent.orchestrator import parse_fallback_tool_call, IRISOrchestrator
+
+    # 1. Exact double-brace pattern from candidate model output
+    raw_double_brace = '"{{\\"name\\": \\"HomeAssistantTool\\", \\"arguments\\": {{\\"action\\": \\"off\\", \\"domain\\": \\"light\\"}}}}"'
+    tool_name, raw_args = parse_fallback_tool_call(raw_double_brace)
+
+    assert tool_name == "HomeAssistantTool"
+    args_dict = json.loads(raw_args)
+    assert args_dict.get("action") == "off"
+    assert args_dict.get("domain") == "light"
+
+    # 2. Asymmetric braces with escaped quotes
+    raw_mixed_brace = '"{{\\"name\\": \\"ProjectOperatorTool\\", \\"arguments\\": {\\"action\\": \\"diagnose_failures\\"}}}"'
+    tool_name_mixed, raw_args_mixed = parse_fallback_tool_call(raw_mixed_brace)
+
+    assert tool_name_mixed == "ProjectOperatorTool"
+    args_dict_mixed = json.loads(raw_args_mixed)
+    assert args_dict_mixed.get("action") == "diagnose_failures"
+
+    # 3. Via IRISOrchestrator instance method
+    from src.tools.registry import ToolRegistry
+
+    orchestrator = IRISOrchestrator(
+        api_base="http://127.0.0.1:11434/v1",
+        api_key="ollama",
+        model="heretic-iris:latest",
+        tool_registry=ToolRegistry
+    )
+    inst_tool, inst_args = orchestrator._parse_fallback_tool_call(raw_double_brace)
+    assert inst_tool == "HomeAssistantTool"
+    assert json.loads(inst_args)["action"] == "off"
+
