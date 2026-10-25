@@ -1,13 +1,78 @@
-.aider*
-.env
+# ==============================================================================
+# IRIS-BOX: Comprehensive .gitignore for Collaborators
+# ==============================================================================
 
+# Python Bytecode & Compilation Caches
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.db
-*.wav
-/models/
-data/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.nox/
+.tox/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Configurations & Secrets (Use .env.example instead)
+.env
+.env.local
+.env.*.local
 *.pem
+*.key
+*.crt
+
+# Node & MCP dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Databases & Runtime State
+*.db
+*.sqlite
+*.sqlite3
+iris.db
+iris_dev.db
+
+# Audio runtime captures & test output
+*.wav
+*.mp3
+!iris_response.mp3
+test_output.wav
+e2e_response.wav
+
+# Model weights & Airgap Wheels (Binary assets)
+models/*.gguf
+models/whisper/
+models/piper/
+models/wakeword/
 dist/wheels/
+
+# Evaluation runtime data & local vector store caches
+data/eval_reports/benchmark_*.json
+data/vector_store/
+data/showcase_workspace/
+
+# Aider & AI Tool Caches
+.aider*
+
+# IDE & OS Files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -160,23 +160,35 @@ Detailed reports are archived in:
 ### Prerequisites
 - Windows 10/11 (64-bit)
 - Python 3.12 (or [uv](https://github.com/astral-sh/uv))
-- Local Ollama instance serving `qwen2.5:7b-instruct`
+- Local Ollama instance serving `qwen2.5:7b-instruct` (or `heretic-iris:latest`)
+- Node.js 18+ (optional, for MCP Gateway in `mcp/`)
 
-### Automated Windows Setup (Offline Bundle)
-The air-gapped bundle includes all locked requirements and pre-compiled wheels in `dist/wheels/`:
+### Setup Instructions for Collaborators
 
-```powershell
-# Run the automated 5-step offline installer
-powershell -ExecutionPolicy Bypass -File scripts/setup_airgap_bundle.ps1
-```
+1. **Configure Environment Variables:**
+   ```powershell
+   Copy-Item .env.example .env
+   # Or on bash:
+   cp .env.example .env
+   ```
 
-The installer autonomously:
-1. Detects local Python 3.12 via `uv` or system path.
-2. Initializes an isolated virtual environment (`.venv`).
-3. Installs dependencies offline using `--no-index --find-links dist/wheels`.
-4. Enforces offline environment variables (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `IRIS_MODELS_DIR`).
-5. Validates local Piper ONNX, Faster-Whisper, openWakeWord, and Ollama weight checksums.
-6. Executes the local air-gap smoke test suite.
+2. **Run the Automated Air-Gap Installer:**
+   ```powershell
+   # Run the automated 5-step offline installer
+   powershell -ExecutionPolicy Bypass -File scripts/setup_airgap_bundle.ps1
+   ```
+
+   Alternatively, if using `uv` with online package index:
+   ```powershell
+   uv sync
+   ```
+
+3. **(Optional) Launch Model Context Protocol (MCP) Gateway:**
+   ```powershell
+   cd mcp
+   npm install
+   npm start
+   ```
 
 ---
 
@@ -234,6 +246,7 @@ iris-backend/
 ├── docs/
 │   ├── architecture_and_verification_report.md # Comprehensive engineering & audit report
 │   └── heretic_model_guide.md           # Local LLM fine-tuning & quantization guide
+├── mcp/                                 # Model Context Protocol (MCP) HTTP/SSE Gateway & Bridge
 ├── models/
 │   ├── piper/                           # Piper ONNX neural TTS voice models
 │   ├── whisper/                         # Faster-Whisper base.en model & tokenizer

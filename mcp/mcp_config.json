@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+        "knowledge-graph-memory": {
+            "command": "npx.cmd",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-memory"
+            ],
+            "shell": true
+        }
+    }
+}

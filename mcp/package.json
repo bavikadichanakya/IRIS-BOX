@@ -1,0 +1,18 @@
+{
+  "name": "iris-mcp-gateway",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) HTTP/SSE Gateway & Knowledge Graph Bridge for IRIS",
+  "type": "module",
+  "main": "mcp_gateway.js",
+  "scripts": {
+    "start": "node mcp_gateway.js",
+    "bridge": "node bridge.js",
+    "server": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/express": "^2.0.2",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}
