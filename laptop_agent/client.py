@@ -86,7 +86,11 @@ class LaptopAgentClient:
                 if msg_type == "pong":
                     continue
 
-                logger.info(f"Received payload: {payload}")
+                # Redact sensitive material from log trace
+                log_summary = f"type='{msg_type}', id='{payload.get('id')}', tool='{payload.get('tool')}'"
+                if "actions" in payload:
+                    log_summary += f", batch_steps={len(payload['actions'])}"
+                logger.info(f"Received workstation payload: {log_summary}")
                 msg_id = payload.get("id")
 
                 # Dispatch tool call

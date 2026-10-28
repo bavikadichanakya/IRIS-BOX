@@ -79,6 +79,17 @@ class WindowAutomationAction(BaseModel):
     state: Optional[str] = Field(None, description="Target window state: 'maximize', 'minimize', or 'restore'")
 
 
+class PhoneCameraVisionAction(BaseModel):
+    """
+    Schema for Phone Camera Perception and On-Demand Vision.
+    Captures a frame from the phone's physical camera (back or front) and inspects it.
+    """
+    action: Literal["capture_and_inspect", "inspect_camera", "describe_view", "read_text"] = "capture_and_inspect"
+    question: str = Field("Describe what is in front of the camera in detail.", description="Question or task to answer using the camera image")
+    camera_id: str = Field("0", description="Camera ID or lens: '0' for back camera, '1' for front/selfie camera")
+    detail_level: Literal["concise", "detailed", "ocr"] = "concise"
+
+
 class VoiceCommandPayload(BaseModel):
     """
     Schema for a voice command payload.

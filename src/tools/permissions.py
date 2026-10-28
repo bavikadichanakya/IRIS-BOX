@@ -27,6 +27,28 @@ class StepTicket(BaseModel):
         return time.time() > self.expires_at
 
 
+import hmac
+
+
+def canonical_payload_hash(payload: Optional[Dict[str, Any]]) -> str:
+    """Computes SHA-256 digest of canonicalized JSON dictionary."""
+    if not payload:
+        return hashlib.sha256(b"{}").hexdigest()
+    try:
+        canonical_str = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        canonical_str = str(sorted(payload.items()))
+    return hashlib.sha256(canonical_str.encode("utf-8")).hexdigest()
+
+
+def mask_token(token: Optional[str]) -> str:
+    """Redacts approval tokens for safe structured logging."""
+    if not token:
+        return "[EMPTY]"
+    clean = str(token).strip()
+    return f"{clean[:6]}...[REDACTED]" if len(clean) > 8 else "[REDACTED]"
+
+
 class PendingAction:
     def __init__(
         self,
@@ -40,6 +62,7 @@ class PendingAction:
         self.token = token
         self.tool_name = tool_name
         self.action_payload = action_payload
+        self.payload_hash = canonical_payload_hash(action_payload)
         self.device_id = device_id
         self.session_id = session_id
         self.created_at = time.time()
@@ -78,7 +101,7 @@ class ConfirmationManager:
             ttl_sec=ttl,
         )
         self._pending_actions[token] = action
-        logger.info(f"Created pending action token '{token}' for tool '{tool_name}' (device '{device_id}')")
+        logger.info(f"Created pending action token '{mask_token(token)}' for tool '{tool_name}' (device '{device_id}')")
         return {
             "confirmation_token": token,
             "tool_name": tool_name,
@@ -103,23 +126,35 @@ class ConfirmationManager:
         action_payload: Optional[Dict[str, Any]] = None,
         device_id: Optional[str] = None,
     ) -> bool:
+        masked = mask_token(token)
         if not token or token not in self._pending_actions:
-            logger.warning(f"Confirmation token '{token}' not found or invalid.")
+            logger.warning(f"Confirmation token '{masked}' not found or invalid.")
             return False
 
-        action = self._pending_actions.pop(token)  # Single-use: pop immediately
-        if action.is_expired():
-            logger.warning(f"Confirmation token '{token}' expired.")
+        action = self._pending_actions.get(token)
+        if not action or action.is_expired():
+            self._pending_actions.pop(token, None)
+            logger.warning(f"Confirmation token '{masked}' expired.")
             return False
 
         if action.tool_name != tool_name:
-            logger.warning(f"Confirmation token '{token}' tool mismatch: expected '{action.tool_name}', got '{tool_name}'.")
+            logger.warning(f"Confirmation token '{masked}' tool mismatch: expected '{action.tool_name}', got '{tool_name}'.")
             return False
 
         if device_id and device_id != "unknown" and action.device_id != "unknown" and action.device_id != device_id:
-            logger.warning(f"Confirmation token '{token}' device mismatch: expected '{action.device_id}', got '{device_id}'.")
+            logger.warning(f"Confirmation token '{masked}' device mismatch: expected '{action.device_id}', got '{device_id}'.")
             return False
 
+        # Verify authorized parameters match if action_payload is provided
+        if action_payload is not None:
+            presented_hash = canonical_payload_hash(action_payload)
+            if not hmac.compare_digest(presented_hash, action.payload_hash):
+                logger.warning(f"Confirmation token '{masked}' parameter mismatch: presented payload parameters do not match authorized action.")
+                return False
+
+        # All validation checks succeeded: atomically consume token (single-use)
+        self._pending_actions.pop(token, None)
+        logger.info(f"Confirmation token '{masked}' successfully validated and consumed.")
         return True
 
 

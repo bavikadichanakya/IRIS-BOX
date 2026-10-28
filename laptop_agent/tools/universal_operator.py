@@ -119,10 +119,29 @@ class UniversalOperator:
         except Exception:
             pass
 
-        # 2. Native keyboard shortcut fallback
-        # In browsers: Ctrl+T opens new tab. In Claude desktop / Slack / Teams / Discord: Ctrl+K or Ctrl+N
-        AppControl.press_key("ctrl")
-        return AppControl.type_text("", press_enter=False)  # placeholder
+        # 2. Context-aware desktop window shortcut:
+        status = SystemControl.get_status()
+        active_win = (status.get("active_window") or "").lower()
+        active_app = cls.active_app.lower()
+
+        # If active application is a web browser (Chrome, Edge, Firefox, Brave, etc.)
+        if any(b in active_win or b in active_app for b in ("chrome", "edge", "firefox", "brave", "opera", "browser", "youtube")):
+            return cls.send_hotkey("ctrl+t")
+
+        # If active application is an editor/IDE (VS Code, Notepad, Cursor, Sublime)
+        if any(ed in active_win or ed in active_app for ed in ("code", "visual studio", "notepad", "cursor", "sublime", "pycharm", "intellij")):
+            return cls.send_hotkey("ctrl+n")
+
+        # If active application is a terminal
+        if any(term in active_win or term in active_app for term in ("terminal", "powershell", "cmd", "bash", "wsl", "alacritty", "wezterm")):
+            return cls.send_hotkey("ctrl+shift+t")
+
+        # If chat apps (Slack, Discord, Teams)
+        if any(c in active_win or c in active_app for c in ("slack", "discord", "teams")):
+            return cls.send_hotkey("ctrl+k")
+
+        # Default fallback: issue standard new file/item hotkey
+        return cls.send_hotkey("ctrl+n")
 
     @classmethod
     async def type_and_send(cls, text: str, submit: bool = True, target_field: Optional[str] = None) -> Dict[str, Any]:

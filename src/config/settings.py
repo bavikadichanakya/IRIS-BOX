@@ -10,15 +10,15 @@ class Settings(BaseSettings):
 
     # LLM Models & Execution Fallback
     DEFAULT_MODEL: str = Field(
-        default=os.getenv("IRIS_LLM_MODEL", os.getenv("OPENAI_MODEL", "heretic-iris:latest")),
+        default=os.getenv("IRIS_LLM_MODEL", os.getenv("OPENAI_MODEL", "qwen3.5:0.8b")),
         description="Default primary LLM model"
     )
     OPERATOR_MODEL: str = Field(
-        default=os.getenv("IRIS_OPERATOR_MODEL", "iris-qwen3-4b-operator"),
-        description="Fine-tuned Qwen3-4B Universal Computer Operator model"
+        default=os.getenv("IRIS_OPERATOR_MODEL", "qwen3.5:0.8b"),
+        description="Fine-tuned Universal Computer Operator model"
     )
     FALLBACK_MODEL: str = Field(
-        default=os.getenv("IRIS_FALLBACK_MODEL", "qwen2.5:7b-instruct"),
+        default=os.getenv("IRIS_FALLBACK_MODEL", "qwen3.5:0.8b"),
         description="Automatic rollback fallback model"
     )
 

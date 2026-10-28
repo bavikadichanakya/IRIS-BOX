@@ -171,5 +171,26 @@ class TestIRISOrchestrator(unittest.TestCase):
         self.assertEqual(res_allowed.output_payload, {"stdout": "hello"})
 
 
+    @patch('openai.OpenAI')
+    def test_operator_model_routing(self, mock_openai):
+        orchestrator = IRISOrchestrator(
+            api_base="http://mock",
+            api_key="mock",
+            model="heretic-iris:latest",
+            operator_model="iris-qwen3-4b-operator",
+            fallback_model="qwen2.5:7b-instruct"
+        )
+        # Operator intents
+        self.assertEqual(orchestrator.route_model("open YouTube on laptop 1"), "iris-qwen3-4b-operator")
+        self.assertEqual(orchestrator.route_model("switch to chrome and click skip ad"), "iris-qwen3-4b-operator")
+        self.assertEqual(orchestrator.route_model("type hello world and press key enter"), "iris-qwen3-4b-operator")
+        self.assertEqual(orchestrator.route_model("run command pytest in terminal"), "iris-qwen3-4b-operator")
+
+        # Conversational / ambient intents
+        self.assertEqual(orchestrator.route_model("what is the capital of France?"), "heretic-iris:latest")
+        self.assertEqual(orchestrator.route_model("turn off the living room lights"), "heretic-iris:latest")
+        self.assertEqual(orchestrator.route_model("how are you doing today?"), "heretic-iris:latest")
+
+
 if __name__ == '__main__':
     unittest.main()

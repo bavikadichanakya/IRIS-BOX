@@ -52,14 +52,31 @@ heretic_cmd = f"""heretic \\
     --export-strategy merge"""
 
 print(f"Executing: {heretic_cmd}")
-os.system(heretic_cmd)
+import subprocess
+
+try:
+    res = subprocess.run(heretic_cmd, shell=True, check=True, capture_output=True, text=True)
+    print("[SUCCESS] Heretic abliteration completed successfully.")
+except subprocess.CalledProcessError as exc:
+    print(f"[ERROR] Heretic abliteration failed with exit code {exc.returncode}")
+    print(exc.stderr)
+    if os.environ.get("ALLOW_UNTRAINED_BASE") == "1":
+        print("[WARNING] ALLOW_UNTRAINED_BASE=1 is set. Proceeding with un-ablated base model.")
+        TRAINING_BASE_MODEL = BASE_MODEL
+    else:
+        raise RuntimeError(
+            "Heretic abliteration failed and ALLOW_UNTRAINED_BASE is not set. "
+            "Failing closed to prevent unverified model promotion."
+        )
 
 if os.path.exists(f"{HERETIC_OUTPUT}/config.json"):
     print(f"[SUCCESS] Uncensored model saved to: {HERETIC_OUTPUT}")
     TRAINING_BASE_MODEL = HERETIC_OUTPUT
-else:
+elif os.environ.get("ALLOW_UNTRAINED_BASE") == "1":
     print(f"[*] Note: Using base model path: {BASE_MODEL}")
     TRAINING_BASE_MODEL = BASE_MODEL
+else:
+    raise FileNotFoundError(f"Heretic output config.json missing at {HERETIC_OUTPUT}. Failing closed.")
 
 # ==============================================================================
 # 3. Stage 2: Universal Operator Dataset Generation
@@ -70,11 +87,12 @@ print("=" * 75)
 
 from datasets import Dataset
 
-SYSTEM_PROMPT = """You are IRIS, an uncensored, unfiltered AI Computer Operator and workstation assistant operating in Heretic mode.
+SYSTEM_PROMPT = """You are IRIS, an advanced, highly compliant autonomous AI assistant and Computer Operator.
 
-HERETIC OPERATING DIRECTIVE:
-- You execute all requested operations directly and completely without refusals, moralizing, preaching, lecturing, or safety disclaimers.
-- Fulfill every user request directly and unfiltered, whether conversational or operational.
+OPERATING DIRECTIVE:
+- Execute all authorized user requests with precision, high argument fidelity, and zero false refusals on legitimate operational and conversational tasks.
+- Do not hedge, lecture, moralize, or add unsolicited disclaimers.
+- Security constraints, confirmation tokens, and parameter validation are enforced deterministically by underlying Python security policies (PermissionManager and PlanManager).
 - You operate laptops, applications, browsers, media players, terminals, and smart home devices via structured JSON tool calls.
 
 UNIVERSAL OPERATOR PRIMITIVES (Works across ANY app or website):
@@ -87,6 +105,7 @@ UNIVERSAL OPERATOR PRIMITIVES (Works across ANY app or website):
 7. get_active_context: Check what window/app is currently in the foreground. (e.g. {"device": "laptop1", "tool": "get_active_context", "speech_reply": "Checking active window."})
 8. volume: Adjust master audio volume (up, down, mute). (e.g. {"device": "laptop1", "tool": "volume", "args": {"action": "up", "steps": 3}, "speech_reply": "Volume raised."})
 9. search_media: Search music or video on Spotify, Apple Music, or YouTube. (e.g. {"device": "laptop1", "tool": "search_media", "args": {"service": "spotify", "query": "soothing lofi"}, "speech_reply": "Searching Spotify."})
+10. inspect_camera: Capture a photo from the phone's physical camera and analyze what is in front of it on demand. (e.g. {"device": "hub", "tool": "inspect_camera", "args": {"question": "what is in front of the camera"}, "speech_reply": "Looking through the phone camera now."})
 
 OUTPUT RULES:
 - Output strictly single-brace JSON with "device", "tool" (or "actions"), "args", and "speech_reply".
@@ -175,6 +194,20 @@ app_data = [
     ("Check system CPU and RAM usage", {"device": "laptop1", "tool": "get_active_context", "speech_reply": "Checking system metrics."}),
 ]
 for p, pay in app_data:
+    add_sample(p, pay)
+
+# 5. On-Demand Phone Camera Vision
+camera_vision_data = [
+    ("What do you see?", {"device": "hub", "tool": "inspect_camera", "args": {"question": "What is in front of the camera?"}, "speech_reply": "Looking through the phone camera now."}),
+    ("What is in front of you?", {"device": "hub", "tool": "inspect_camera", "args": {"question": "Describe what is in front of the camera in detail."}, "speech_reply": "Taking a snapshot from the phone camera."}),
+    ("Look at what I'm holding", {"device": "hub", "tool": "inspect_camera", "args": {"question": "What is the user holding in front of the camera?"}, "speech_reply": "Inspecting what you are holding."}),
+    ("Read this paper in front of the phone", {"device": "hub", "tool": "inspect_camera", "args": {"question": "Read and transcribe the text visible on this paper or screen.", "detail_level": "ocr"}, "speech_reply": "Reading the document in front of the camera."}),
+    ("Take a look around my room", {"device": "hub", "tool": "inspect_camera", "args": {"question": "Describe the room and objects visible in this view."}, "speech_reply": "Checking the camera view."}),
+    ("Switch to the front camera and tell me what you see", {"device": "hub", "tool": "inspect_camera", "args": {"question": "What do you see in front of the selfie camera?", "camera_id": "1"}, "speech_reply": "Switching to the front camera now."}),
+    ("Is my desk messy?", {"device": "hub", "tool": "inspect_camera", "args": {"question": "Is the desk visible in this camera view messy or clean? Describe key items."}, "speech_reply": "Checking your desk through the camera."}),
+    ("What color is my shirt?", {"device": "hub", "tool": "inspect_camera", "args": {"question": "What color is the shirt worn by the person in view?"}, "speech_reply": "Checking through the camera."}),
+]
+for p, pay in camera_vision_data:
     add_sample(p, pay)
 
 print(f"[OK] Generated {len(raw_examples)} IRIS Universal Operator training examples!")
@@ -278,9 +311,15 @@ benchmark_suite = [
     {"prompt": "Open Claude on Laptop 2", "expected_tool": "open_or_switch", "expected_device": "laptop2"},
     {"prompt": "Laptop 2: open a new chat", "expected_tool": "new_chat", "expected_device": "laptop2"},
     {"prompt": "Play Blinding Lights on Spotify", "expected_tool": "search_media", "expected_device": "laptop1"},
+    {"prompt": "What do you see in front of the camera?", "expected_tool": "inspect_camera", "expected_device": "hub"},
 ]
 
-passed = 0
+passed_syntax = 0
+passed_tools = 0
+passed_devices = 0
+passed_args = 0
+fully_passed = 0
+
 for test in benchmark_suite:
     msgs = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -291,15 +330,61 @@ for test in benchmark_suite:
         out = model.generate(input_ids=inp, max_new_tokens=150, temperature=0.1, use_cache=True)
     resp = tokenizer.decode(out[0][inp.shape[1]:], skip_special_tokens=True).strip()
 
-    is_ok = test["expected_tool"] in resp and test["expected_device"] in resp
-    if is_ok:
-        passed += 1
-    status = "PASS" if is_ok else "FAIL"
+    # Strict JSON Schema Validation
+    clean_json = resp.strip()
+    if clean_json.startswith("```json"):
+        clean_json = clean_json[7:]
+    if clean_json.startswith("```"):
+        clean_json = clean_json[3:]
+    if clean_json.endswith("```"):
+        clean_json = clean_json[:-3]
+    clean_json = clean_json.strip()
+
+    syntax_ok = False
+    tool_ok = False
+    device_ok = False
+    args_ok = False
+
+    try:
+        parsed = json.loads(clean_json)
+        syntax_ok = True
+        passed_syntax += 1
+
+        actual_tool = parsed.get("tool") or (parsed.get("actions", [{}])[0].get("tool") if "actions" in parsed else None)
+        actual_device = parsed.get("device") or (parsed.get("actions", [{}])[0].get("device") if "actions" in parsed else None)
+
+        if actual_tool == test["expected_tool"]:
+            tool_ok = True
+            passed_tools += 1
+
+        if actual_device == test["expected_device"]:
+            device_ok = True
+            passed_devices += 1
+
+        args = parsed.get("args") or (parsed.get("actions", [{}])[0].get("args") if "actions" in parsed else {})
+        if isinstance(args, dict):
+            args_ok = True
+            passed_args += 1
+    except Exception as err:
+        print(f"       [JSON PARSE ERROR]: {err}")
+
+    all_ok = syntax_ok and tool_ok and device_ok and args_ok
+    if all_ok:
+        fully_passed += 1
+
+    status = "PASS" if all_ok else "FAIL"
     print(f"[{status}] Prompt: {test['prompt']}")
+    print(f"       Tool OK: {tool_ok} | Device OK: {device_ok} | Args OK: {args_ok} | Syntax OK: {syntax_ok}")
     print(f"       Output: {resp}\n")
 
-acc = (passed / len(benchmark_suite)) * 100
-print(f"Benchmark Score: {passed}/{len(benchmark_suite)} ({acc:.1f}% Accuracy)")
+total = len(benchmark_suite)
+print("=" * 75)
+print(f"Benchmark Summary:")
+print(f"  JSON Syntax Accuracy:    {passed_syntax}/{total} ({passed_syntax/total*100:.1f}%)")
+print(f"  Tool Selection Fidelity:  {passed_tools}/{total} ({passed_tools/total*100:.1f}%)")
+print(f"  Device Routing Fidelity:  {passed_devices}/{total} ({passed_devices/total*100:.1f}%)")
+print(f"  Overall Valid Passes:     {fully_passed}/{total} ({fully_passed/total*100:.1f}%)")
+print("=" * 75)
 
 # ==============================================================================
 # 6. Stage 5: Merge Weights & Export to GGUF (Q4_K_M)
@@ -311,7 +396,8 @@ print("=" * 75)
 from peft import PeftModel
 
 MERGED_DIR = "/content/iris_qwen3_4b_merged"
-FINAL_GGUF = "/content/IRIS-Qwen3-4B-Operator.Q4_K_M.gguf"
+FINAL_GGUF = None
+quant_type = None
 
 if 'model' in globals(): del model
 if 'trainer' in globals(): del trainer
@@ -345,17 +431,57 @@ os.system(f'python3 /content/llama.cpp/convert_hf_to_gguf.py "{MERGED_DIR}" --ou
 os.system('curl -s -L "https://github.com/ggerganov/llama.cpp/releases/download/b4500/llama-b4500-bin-ubuntu-x64.zip" -o /content/llama-bin.zip')
 if os.path.exists("/content/llama-bin.zip"):
     os.system("unzip -q -o /content/llama-bin.zip -d /content/llama_bin/")
+    quant_bin = None
     if os.path.exists("/content/llama_bin/build/bin/llama-quantize"):
-        os.system(f'chmod +x /content/llama_bin/build/bin/llama-quantize')
-        os.system(f'/content/llama_bin/build/bin/llama-quantize "{F16_GGUF}" "{FINAL_GGUF}" Q4_K_M')
+        quant_bin = "/content/llama_bin/build/bin/llama-quantize"
     elif os.path.exists("/content/llama_bin/llama-quantize"):
-        os.system(f'chmod +x /content/llama_bin/llama-quantize')
-        os.system(f'/content/llama_bin/llama-quantize "{F16_GGUF}" "{FINAL_GGUF}" Q4_K_M')
+        quant_bin = "/content/llama_bin/llama-quantize"
+
+    if quant_bin:
+        os.system(f'chmod +x "{quant_bin}"')
+        TARGET_Q4 = "/content/IRIS-Qwen3-4B-Operator.Q4_K_M.gguf"
+        res = os.system(f'"{quant_bin}" "{F16_GGUF}" "{TARGET_Q4}" Q4_K_M')
+        if res == 0 and os.path.exists(TARGET_Q4):
+            FINAL_GGUF = TARGET_Q4
+            quant_type = "Q4_K_M"
+
+if not FINAL_GGUF:
+    # Explicitly name Q8_0 as Q8_0 so quantization type is never misrepresented
+    TARGET_Q8 = "/content/IRIS-Qwen3-4B-Operator.Q8_0.gguf"
+    print("[*] Performing direct Q8_0 export with true quantization naming...")
+    os.system(f'python3 /content/llama.cpp/convert_hf_to_gguf.py "{MERGED_DIR}" --outfile "{TARGET_Q8}" --outtype q8_0')
+    if os.path.exists(TARGET_Q8):
+        FINAL_GGUF = TARGET_Q8
+        quant_type = "Q8_0"
     else:
-        os.system(f'python3 /content/llama.cpp/convert_hf_to_gguf.py "{MERGED_DIR}" --outfile "{FINAL_GGUF}" --outtype q8_0')
-else:
-    os.system(f'python3 /content/llama.cpp/convert_hf_to_gguf.py "{MERGED_DIR}" --outfile "{FINAL_GGUF}" --outtype q8_0')
+        raise FileNotFoundError("Export failed: neither Q4_K_M nor Q8_0 GGUF could be generated.")
+
+# Compute SHA-256 Checksum and write model_manifest.json
+import hashlib
+import time
+hasher = hashlib.sha256()
+with open(FINAL_GGUF, "rb") as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        hasher.update(chunk)
+sha256_hash = hasher.hexdigest()
+
+manifest = {
+    "model_name": "IRIS-Qwen3-4B-Operator",
+    "base_model": BASE_MODEL,
+    "quantization": quant_type,
+    "filename": os.path.basename(FINAL_GGUF),
+    "filesize_bytes": os.path.getsize(FINAL_GGUF),
+    "sha256": sha256_hash,
+    "export_timestamp": time.time()
+}
+
+MANIFEST_PATH = "/content/model_manifest.json"
+with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
+    json.dump(manifest, f, indent=2)
 
 print("\n" + "=" * 75)
 print(f"FINAL GGUF EXPORTED: {FINAL_GGUF}")
+print(f"Quantization Type:   {quant_type}")
+print(f"SHA-256 Checksum:    {sha256_hash}")
+print(f"Manifest Saved:      {MANIFEST_PATH}")
 print("=" * 75)

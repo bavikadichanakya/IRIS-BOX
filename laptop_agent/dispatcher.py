@@ -14,11 +14,25 @@ from laptop_agent.tools.universal_operator import UniversalOperator
 logger = logging.getLogger("iris.laptop_agent.dispatcher")
 
 
+def redact_sensitive_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Redacts tokens, passwords, and sensitive keys from log output."""
+    sensitive_keys = {"token", "password", "key", "secret", "auth", "credential", "auth_token"}
+    safe = {}
+    for k, v in args.items():
+        if any(s in str(k).lower() for s in sensitive_keys):
+            safe[k] = "[REDACTED]"
+        elif isinstance(v, str) and (v.startswith("cfm_") or v.startswith("stk_")):
+            safe[k] = f"{v[:6]}...[REDACTED]"
+        else:
+            safe[k] = v
+    return safe
+
+
 class ToolDispatcher:
     """
     Central command dispatcher for the laptop agent.
     Normalizes incoming JSON requests, routes to the corresponding tool handler,
-    and returns standardized execution receipts.
+    enforces fail-fast compound execution, and returns standardized execution receipts.
     """
 
     def __init__(self, device_name: str = "laptop1"):
@@ -40,13 +54,31 @@ class ToolDispatcher:
         # Check for batch / compound multi-step action chain
         if "actions" in payload and isinstance(payload["actions"], list):
             step_results = []
-            for step in payload["actions"]:
+            continue_on_error = bool(payload.get("continue_on_error", False))
+            for idx, step in enumerate(payload["actions"]):
                 step["device"] = self.device_name
                 step_res = await self.dispatch(step)
                 step_results.append(step_res)
+                
+                # Fail-fast by default to prevent state desynchronization
+                if not step_res.get("success", False) and not continue_on_error:
+                    logger.warning(
+                        f"[{self.device_name}] Compound action step {idx + 1} ('{step.get('tool')}') failed. "
+                        f"Aborting subsequent {len(payload['actions']) - idx - 1} steps."
+                    )
+                    for remaining in payload["actions"][idx + 1:]:
+                        step_results.append({
+                            "success": False,
+                            "skipped": True,
+                            "tool": remaining.get("tool", "unknown"),
+                            "reason": f"Aborted: preceding step '{step.get('tool')}' failed",
+                            "device": self.device_name,
+                        })
+                    break
                 await asyncio.sleep(0.3)
+
             return {
-                "success": all(r.get("success", False) for r in step_results),
+                "success": all(r.get("success", False) for r in step_results if not r.get("skipped")),
                 "device": self.device_name,
                 "tool": "batch_actions",
                 "steps_count": len(step_results),
@@ -61,7 +93,7 @@ class ToolDispatcher:
         if not args and any(k for k in payload if k not in ("device", "tool", "action", "id", "type")):
             args = {k: v for k, v in payload.items() if k not in ("device", "tool", "action", "id", "type")}
 
-        logger.info(f"[{self.device_name}] Dispatching tool '{tool_name}' with args {args}")
+        logger.info(f"[{self.device_name}] Dispatching tool '{tool_name}' with args {redact_sensitive_args(args)}")
 
         try:
             # 0. Universal Operator Primitives (Works on ANY app or website)

@@ -249,8 +249,6 @@ class SystemCommandTool(BaseTool):
                     output_payload={
                         "stdout": result.stdout.strip(),
                         "stderr": result.stderr.strip(),
-                        "returncode": result.returncode,
-                        "exit_code": result.returncode,
                     },
                     error=error_message,
                 )
@@ -261,8 +259,6 @@ class SystemCommandTool(BaseTool):
                     output_payload={
                         "stdout": result.stdout.strip(),
                         "stderr": result.stderr.strip(),
-                        "returncode": result.returncode,
-                        "exit_code": result.returncode,
                     },
                 )
         except subprocess.TimeoutExpired as e:
@@ -995,5 +991,8 @@ class WindowAutomationTool(BaseTool):
 
 ToolRegistry._tool_classes["WindowTool"] = WindowAutomationTool
 
-
-
+# Vision perception tool registration
+try:
+    import src.vision.phone_camera  # noqa: F401
+except Exception as _e:
+    pass

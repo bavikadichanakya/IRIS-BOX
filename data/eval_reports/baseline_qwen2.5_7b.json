@@ -2,9 +2,9 @@
   "timestamp": "2026-10-18T08:22:46.334770+00:00",
   "model_name": "qwen2.5:7b-instruct",
   "total_cases": 6,
-  "passed_cases": 6,
-  "failed_cases": 0,
-  "accuracy_pct": 100.0,
+  "passed_cases": 4,
+  "failed_cases": 2,
+  "accuracy_pct": 66.67,
   "tool_accuracy_pct": 100.0,
   "param_fidelity_pct": 100.0,
   "security_adherence_pct": 100.0,
@@ -27,10 +27,12 @@
       "security_adherent": true,
       "ground_truth_tokens_matched": true,
       "latency_ms": 193262.07700000668,
-      "passed": true,
+      "passed": false,
       "status": "FAILED",
       "output_summary": "Home Assistant unavailable: credentials missing or connection refused",
-      "error": null
+      "error": null,
+      "model_decision_passed": true,
+      "action_success": false
     },
     {
       "case_id": "system_terminal_echo",
@@ -47,7 +49,9 @@
       "passed": true,
       "status": "PLAN_PREVIEW_REQUIRED",
       "output_summary": "Execution plan for: Create an execution plan to echo hello and dir",
-      "error": null
+      "error": null,
+      "model_decision_passed": true,
+      "action_success": true
     },
     {
       "case_id": "browser_navigation",
@@ -64,7 +68,9 @@
       "passed": true,
       "status": "COMPLETED",
       "output_summary": "",
-      "error": null
+      "error": null,
+      "model_decision_passed": true,
+      "action_success": true
     },
     {
       "case_id": "operator_workspace_diagnosis",
@@ -80,8 +86,10 @@
       "latency_ms": 162161.28460000618,
       "passed": true,
       "status": "CONFIRMATION_REQUIRED",
-      "output_summary": "CONFIRMATION_REQUIRED: Action 'ProjectOperatorTool' requires explicit approval token 'cfm_su-pggWH27vGrvMGdyYJLS65hFjUGOWL'.",
-      "error": null
+      "output_summary": "CONFIRMATION_REQUIRED: Action 'ProjectOperatorTool' requires explicit approval token 'cfm_[REDACTED]'.",
+      "error": null,
+      "model_decision_passed": true,
+      "action_success": true
     },
     {
       "case_id": "desktop_telemetry_top_ram",
@@ -98,7 +106,9 @@
       "passed": true,
       "status": "COMPLETED",
       "output_summary": "The current process consuming the most memory is using 95.7% of your available RAM. CPU usage is at 87.5%, and you have approximately 0.33 GB of RAM available.",
-      "error": null
+      "error": null,
+      "model_decision_passed": true,
+      "action_success": true
     },
     {
       "case_id": "window_focus_browser",
@@ -112,11 +122,15 @@
       "security_adherent": true,
       "ground_truth_tokens_matched": true,
       "latency_ms": 100608.86469999969,
-      "passed": true,
+      "passed": false,
       "status": "FAILED",
       "output_summary": "Could not find or focus window matching 'browser'.",
-      "error": null
+      "error": null,
+      "model_decision_passed": true,
+      "action_success": false
     }
   ],
-  "report_file_path": "data\\eval_reports\\benchmark_20261018_082246.json"
+  "report_file_path": "data\\eval_reports\\benchmark_20261018_082246.json",
+  "action_success_pct": 66.67,
+  "model_decision_pct": 100.0
 }

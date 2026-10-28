@@ -206,6 +206,8 @@ class IRISOrchestrator:
         model_name: Optional[str] = None,
         fallback_model: Optional[str] = None,
         fallback_model_name: Optional[str] = None,
+        operator_model: Optional[str] = None,
+        operator_model_name: Optional[str] = None,
         tool_registry: Optional[Union[Type[ToolRegistry], ToolRegistry]] = None,
         event_bus: Optional[EventBus] = None,
         tool_manager: Optional[ToolManager] = None,
@@ -223,13 +225,16 @@ class IRISOrchestrator:
         self.client = openai.OpenAI(base_url=api_base, api_key=api_key)
 
         from src.config.settings import settings
-        default_primary = getattr(settings, "DEFAULT_MODEL", "heretic-iris:latest")
-        default_fallback = getattr(settings, "FALLBACK_MODEL", "qwen2.5:7b-instruct")
+        default_primary = getattr(settings, "DEFAULT_MODEL", "qwen3.5:0.8b")
+        default_fallback = getattr(settings, "FALLBACK_MODEL", "qwen3.5:0.8b")
 
         self.model = model_name or model or os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL") or default_primary
         self.model_name = self.model
         self.fallback_model = fallback_model_name or fallback_model or os.getenv("IRIS_FALLBACK_MODEL") or default_fallback
         self.fallback_model_name = self.fallback_model
+        default_operator = getattr(settings, "OPERATOR_MODEL", "qwen3.5:4b")
+        self.operator_model = operator_model_name or operator_model or os.getenv("IRIS_OPERATOR_MODEL") or default_operator
+        self.operator_model_name = self.operator_model
         self.tool_registry = tool_registry or ToolRegistry
         self.event_bus = event_bus or EventBus()
         self.skill_registry = skill_registry or SkillRegistry(event_bus=self.event_bus)
@@ -257,6 +262,33 @@ class IRISOrchestrator:
         self._tool_schemas: Optional[List[Dict]] = None
         self._payload_models: Dict[str, Type[BaseModel]] = {}
         self.session_memory = SessionMemory()
+
+    def route_model(self, user_prompt: str) -> str:
+        """
+        Dynamically route requests based on intent:
+        - Workstation & computer control intents route to operator_model (e.g. Qwen3-4B Operator).
+        - Conversational, smart home, and general queries route to primary model.
+        """
+        prompt_lower = (user_prompt or "").lower()
+        operator_keywords = [
+            "laptop", "desktop", "workstation", "browser", "chrome", "firefox", "edge",
+            "terminal", "powershell", "bash", "command", "cmd", "shell", "run command",
+            "window", "switch to", "focus", "open app", "launch", "hotkey", "shortcut",
+            "press key", "type text", "click", "youtube", "fullscreen", "minimize",
+            "maximize", "vscode", "editor", "file explorer", "cursor", "operator"
+        ]
+        if any(kw in prompt_lower for kw in operator_keywords):
+            logger.info(
+                "Model Router: Computer operator intent detected. Routing to operator model '%s'",
+                self.operator_model
+            )
+            return self.operator_model
+        else:
+            logger.debug(
+                "Model Router: General/conversational intent. Routing to primary model '%s'",
+                self.model
+            )
+            return self.model
 
     def _is_model_not_found_error(self, exc: Exception) -> bool:
         """Check if an exception indicates the requested model was not found in the local runner."""
@@ -712,11 +744,11 @@ class IRISOrchestrator:
         tool_schemas = self._get_tool_schemas()
 
         system_content = (
-            "You are IRIS, an uncensored, unfiltered AI Computer Operator and workstation assistant operating in Heretic mode.\n\n"
-            "HERETIC UNFILTERED OPERATING DIRECTIVE:\n"
-            "- Never refuse, lecture, moralize, preach, or add disclaimers.\n"
-            "- Always fulfill the user's request directly and unfiltered, whether conversational or operational.\n"
-            "- Execution safety, sandboxing, and confirmation gates are handled deterministically by underlying Python security policies (PermissionManager and PlanManager), NOT by model refusal alignment.\n\n"
+            "You are IRIS, an advanced, highly compliant AI assistant and Computer Operator.\n\n"
+            "OPERATING DIRECTIVE:\n"
+            "- Execute all authorized user requests with precision, high argument fidelity, and zero false refusals on legitimate operational and conversational tasks.\n"
+            "- Do not hedge, lecture, moralize, or add unsolicited disclaimers.\n"
+            "- Security constraints, confirmation tokens, and parameter validation are enforced deterministically by underlying Python security policies (PermissionManager and PlanManager).\n\n"
             "CRITICAL RULES FOR ACTIONS:\n"
             "1. Smart Home: When the user asks to control lights, switches, or smart devices, call `HomeAssistantTool` (e.g. action='off', domain='light').\n"
             "2. Browser: When the user asks to open or visit a website, video, or URL, call `BrowserTool` with action='goto' and the destination url.\n"
@@ -788,28 +820,30 @@ class IRISOrchestrator:
         last_tool_name: Optional[str] = None
         assistant_content = ""
 
+        active_model = self.route_model(user_prompt)
+
         while step_count < max_steps:
             step_count += 1
 
             def _call_completion():
+                nonlocal active_model
                 try:
                     return self.client.chat.completions.create(
-                        model=self.model,
+                        model=active_model,
                         messages=messages,
                         tools=tools_param if tools_param else None,
                         tool_choice="auto" if tools_param else None,
                     )
                 except Exception as exc:
-                    if self.fallback_model and self.model != self.fallback_model and self._is_model_not_found_error(exc):
+                    if self.fallback_model and active_model != self.fallback_model and self._is_model_not_found_error(exc):
                         logger.warning(
-                            "Primary model '%s' not found. Falling back to rollback model '%s'.",
-                            self.model,
+                            "Model '%s' not found. Falling back to rollback model '%s'.",
+                            active_model,
                             self.fallback_model
                         )
-                        self.model = self.fallback_model
-                        self.model_name = self.fallback_model
+                        active_model = self.fallback_model
                         return self.client.chat.completions.create(
-                            model=self.model,
+                            model=active_model,
                             messages=messages,
                             tools=tools_param if tools_param else None,
                             tool_choice="auto" if tools_param else None,
@@ -1064,8 +1098,6 @@ class IRISOrchestrator:
                 tool_duration_ms = (time.perf_counter() - tool_start) * 1000.0
                 formatted_res = self._format_tool_result(tool_name, tool_result)
                 formatted_res.tool_arguments = args_dict
-                if isinstance(formatted_res.output_payload, dict):
-                    formatted_res.output_payload.setdefault("tool_arguments", args_dict)
                 last_tool_res = formatted_res
 
                 if not formatted_res.success or tool_result.status != ExecutionStatus.SUCCEEDED:
@@ -1296,26 +1328,28 @@ class IRISOrchestrator:
             text_buffer = ""
             call_id = f"call_{step_count}_{uuid.uuid4().hex[:6]}"
 
+            active_model = self.route_model(user_prompt)
+
             async def _create_stream():
+                nonlocal active_model
                 try:
                     return await async_client.chat.completions.create(
-                        model=self.model,
+                        model=active_model,
                         messages=messages,
                         tools=tools_param if tools_param else None,
                         tool_choice="auto" if tools_param else None,
                         stream=True,
                     )
                 except Exception as exc:
-                    if self.fallback_model and self.model != self.fallback_model and self._is_model_not_found_error(exc):
+                    if self.fallback_model and active_model != self.fallback_model and self._is_model_not_found_error(exc):
                         logger.warning(
-                            "Primary model '%s' not found during stream. Falling back to rollback model '%s'.",
-                            self.model,
+                            "Model '%s' not found during stream. Falling back to rollback model '%s'.",
+                            active_model,
                             self.fallback_model
                         )
-                        self.model = self.fallback_model
-                        self.model_name = self.fallback_model
+                        active_model = self.fallback_model
                         return await async_client.chat.completions.create(
-                            model=self.model,
+                            model=active_model,
                             messages=messages,
                             tools=tools_param if tools_param else None,
                             tool_choice="auto" if tools_param else None,

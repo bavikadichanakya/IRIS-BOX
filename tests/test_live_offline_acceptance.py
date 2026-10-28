@@ -154,3 +154,93 @@ async def test_live_offline_unmocked_end_to_end_acceptance():
         assert len(final_audio) >= 1000, (
             f"Synthesized audio length too small ({len(final_audio)} bytes)"
         )
+
+
+from fastapi.testclient import TestClient
+from src.server.app import app
+from src.security.auth import auth_manager
+import asyncio
+
+
+def test_authenticated_laptop_agent_ws_journey():
+    """
+    End-to-end acceptance test for the authenticated laptop-agent lifecycle (F-02, F-07, F-18):
+    1. Unauthorized agent connection is rejected immediately.
+    2. Authorized agent connects, sends registration handshake, receives server ACK.
+    3. Device is registered in FleetManager as online with capabilities.
+    4. Hub dispatches an operator command; agent receives, executes, and acks.
+    5. Agent sends ping, receives pong.
+    """
+    with TestClient(app) as client:
+        # 1. Negative test: unauthorized connection
+        with client.websocket_connect("/ws/agent") as ws_unauth:
+            ws_unauth.send_json({
+                "type": "register",
+                "device": "rogue_laptop",
+                "token": "invalid_untrusted_token",
+                "capabilities": ["run_command"]
+            })
+            resp = ws_unauth.receive_json()
+            assert resp.get("type") == "error"
+            assert resp.get("error") == "UNAUTHORIZED"
+
+        # 2. Positive test: authenticated connection
+        valid_token = auth_manager.get_master_key()
+        with client.websocket_connect("/ws/agent") as ws:
+            ws.send_json({
+                "type": "register",
+                "device": "laptop1",
+                "token": valid_token,
+                "capabilities": ["open_app", "system_status", "volume", "hotkey"]
+            })
+            ack = ws.receive_json()
+            assert ack.get("type") == "registered"
+            assert ack.get("status") == "ok"
+            assert ack.get("device") == "laptop1"
+
+            # 3. FleetManager verification
+            fleet_mgr = getattr(app.state, "fleet_manager", None)
+            assert fleet_mgr is not None
+            device = fleet_mgr.get_speaker("laptop1")
+            assert device is not None
+            assert device.status == "online"
+            assert device.device_type == "laptop"
+
+            # 4. Ping-Pong Heartbeat verification
+            ws.send_json({"type": "ping", "timestamp": 12345.0})
+            pong = ws.receive_json()
+            assert pong.get("type") == "pong"
+
+            # 5. Device command dispatch verification
+            from src.server.websocket import ws_manager
+
+            sess_id = ws_manager.device_to_session.get("laptop1")
+            assert sess_id is not None
+            server_ws = ws_manager.active_connections.get(sess_id)
+            assert server_ws is not None
+
+            # Server sends down to client
+            asyncio.run(server_ws.send_json({
+                "type": "device_command",
+                "command_id": "cmd-accept-001",
+                "action": "system_status",
+                "payload": {"target": "workstation"}
+            }))
+
+            # Client receives command
+            cmd_received = ws.receive_json()
+            assert cmd_received.get("action") == "system_status"
+            assert cmd_received.get("command_id") == "cmd-accept-001"
+
+            # Client responds with tool result ACK
+            ws.send_json({
+                "type": "tool_result",
+                "id": cmd_received.get("command_id"),
+                "device": "laptop1",
+                "result": {"success": True, "message": "System status nominal: CPU 12%, RAM 45%"}
+            })
+
+            # Check that ping still works after tool execution
+            ws.send_json({"type": "ping", "timestamp": 12346.0})
+            pong2 = ws.receive_json()
+            assert pong2.get("type") == "pong"

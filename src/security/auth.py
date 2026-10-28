@@ -12,11 +12,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHea
 
 logger = logging.getLogger("iris.security.auth")
 
-# Public endpoint paths that bypass authentication
+# Public endpoint paths that bypass authentication for basic health checks
 PUBLIC_PATHS: Set[str] = {
     "/",
     "/dashboard",
-    "/api/dashboard/status",
     "/mobile",
     "/api/pairing/pair",
     "/pairing/pair",
@@ -25,11 +24,24 @@ PUBLIC_PATHS: Set[str] = {
     "/health/ready",
     "/health/liveness",
     "/health/readiness",
-    "/health/detailed",
-    "/metrics",
     "/docs",
     "/openapi.json",
     "/redoc",
+}
+
+# Detailed telemetry and operational inspection paths (Loopback allowed or authenticated)
+SENSITIVE_TELEMETRY_PATHS: Set[str] = {
+    "/api/dashboard/status",
+    "/health/detailed",
+    "/metrics",
+}
+
+# Known public template/sample credentials that MUST be rejected in production
+INSECURE_SAMPLE_KEYS: Set[str] = {
+    "ollama", "default", "secret", "password", "admin", "123456",
+    "iris-master-key-offline-2026", "iris_secret_token", "iris_master_token",
+    "change-me", "your-master-token-here", "change-me-to-a-secure-random-token",
+    "test", "testkey", "sample"
 }
 
 http_bearer = HTTPBearer(auto_error=False)
@@ -39,7 +51,8 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 class AuthManager:
     """
     Manages API keys, bearer tokens, and per-device tokens.
-    Rejects default trivial keys and generates a secure random token if unconfigured.
+    Rejects default trivial keys, blocks known sample credentials,
+    and generates a secure random token if unconfigured or insecure.
     """
 
     def __init__(self, master_key: Optional[str] = None):
@@ -48,11 +61,21 @@ class AuthManager:
             or os.getenv("IRIS_API_KEY")
             or os.getenv("IRIS_MASTER_TOKEN")
         )
-        if not key or key.lower() in ("ollama", "default", "secret", "password", "admin", "123456"):
-            key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-            if not key or key.lower() in ("ollama", "default", "secret", "password", "admin", "123456"):
-                key = secrets.token_hex(32)
-                logger.info("No master token configured. Generated secure random token for startup.")
+        is_insecure = not key or key.strip().lower() in INSECURE_SAMPLE_KEYS
+
+        if is_insecure:
+            is_prod = os.getenv("IRIS_ENVIRONMENT", "local").lower() == "production"
+            if is_prod:
+                raise RuntimeError(
+                    "SECURITY_ERROR: Insecure sample token detected in production. "
+                    "Configure a unique IRIS_MASTER_TOKEN in your environment."
+                )
+            key = secrets.token_hex(32)
+            logger.warning(
+                "SECURITY_NOTICE: Insecure sample or empty master token detected. "
+                "Generated secure random token for active runtime session."
+            )
+
         self.master_key = key
         self.device_tokens: Dict[str, str] = {}  # device_id -> token
         self._plan_tokens: Dict[str, Dict[str, Any]] = {}  # plan_id -> metadata
@@ -145,6 +168,13 @@ async def verify_api_key(
     FastAPI dependency that enforces API key or Bearer token authentication.
     """
     path = request.url.path
+    client_host = request.client.host if request.client else "unknown"
+    is_loopback = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
+
+    # Sensitive telemetry endpoints are accessible without auth ONLY over loopback
+    if (path in SENSITIVE_TELEMETRY_PATHS or path.rstrip("/") in SENSITIVE_TELEMETRY_PATHS) and is_loopback:
+        return "loopback_telemetry"
+
     if (
         path in PUBLIC_PATHS 
         or path.rstrip("/") in PUBLIC_PATHS

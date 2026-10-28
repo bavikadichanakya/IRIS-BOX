@@ -232,13 +232,14 @@ class ReplayEngine:
                     tokens_matched = False
                     break
 
-        passed = (
+        model_decision_passed = (
             tool_selection_correct and
             params_matched and
             security_adherent and
-            tokens_matched and
-            error is None
+            tokens_matched
         )
+        action_success = (status in ("COMPLETED", "SUCCEEDED", "PLAN_PREVIEW_REQUIRED", "CONFIRMATION_REQUIRED")) and (error is None)
+        passed = model_decision_passed and action_success
 
         return TaskExecutionResult(
             case_id=case.id,
@@ -248,6 +249,8 @@ class ReplayEngine:
             params_matched=params_matched,
             security_adherent=security_adherent,
             ground_truth_tokens_matched=tokens_matched,
+            action_success=action_success,
+            model_decision_passed=model_decision_passed,
             latency_ms=duration_ms,
             passed=passed,
             status=status or "COMPLETED",
@@ -291,6 +294,8 @@ class ReplayEngine:
         tool_acc_pct = (sum(1 for r in results if r.tool_selection_correct) / total_cases * 100.0) if total_cases > 0 else 0.0
         param_fid_pct = (sum(1 for r in results if r.params_matched) / total_cases * 100.0) if total_cases > 0 else 0.0
         sec_adh_pct = (sum(1 for r in results if r.security_adherent) / total_cases * 100.0) if total_cases > 0 else 0.0
+        action_succ_pct = (sum(1 for r in results if r.action_success) / total_cases * 100.0) if total_cases > 0 else 0.0
+        model_dec_pct = (sum(1 for r in results if r.model_decision_passed) / total_cases * 100.0) if total_cases > 0 else 0.0
 
         latencies = [r.latency_ms for r in results] if results else [0.0]
         avg_latency = statistics.mean(latencies) if latencies else 0.0
@@ -324,6 +329,8 @@ class ReplayEngine:
             tool_accuracy_pct=round(tool_acc_pct, 2),
             param_fidelity_pct=round(param_fid_pct, 2),
             security_adherence_pct=round(sec_adh_pct, 2),
+            action_success_pct=round(action_succ_pct, 2),
+            model_decision_pct=round(model_dec_pct, 2),
             avg_latency_ms=round(avg_latency, 2),
             median_latency_ms=round(median_latency, 2),
             mean_latency_sec=round(mean_latency_sec, 2),

@@ -11,8 +11,9 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Request, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Request, HTTPException, status
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from src.config.settings import settings
 from src.security import (
     auth_manager,
     verify_api_key,
@@ -94,10 +95,18 @@ async def lifespan(app: FastAPI):
 
     api_base = os.getenv("IRIS_LLM_BASE_URL") or os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("IRIS_API_KEY", "ollama")
-    model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", "heretic-iris:latest")
-    fallback_model = os.getenv("IRIS_FALLBACK_MODEL", "qwen2.5:7b-instruct")
+    model = os.getenv("IRIS_LLM_MODEL") or os.getenv("OPENAI_MODEL", getattr(settings, "DEFAULT_MODEL", "qwen3.5:0.8b"))
+    fallback_model = os.getenv("IRIS_FALLBACK_MODEL", getattr(settings, "FALLBACK_MODEL", "qwen3.5:0.8b"))
+    operator_model = os.getenv("IRIS_OPERATOR_MODEL", getattr(settings, "OPERATOR_MODEL", "qwen3.5:0.8b"))
 
-    orchestrator = IRISOrchestrator(api_base=api_base, api_key=api_key, model=model, fallback_model=fallback_model, database=db)
+    orchestrator = IRISOrchestrator(
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        fallback_model=fallback_model,
+        operator_model=operator_model,
+        database=db,
+    )
     memory_store = getattr(orchestrator, "memory_store", None) or MemoryStore(db=db)
     plan_manager = getattr(orchestrator, "plan_manager", None) or PlanManager()
     skill_registry = getattr(orchestrator, "skill_registry", None) or SkillRegistry()
@@ -648,6 +657,126 @@ async def websocket_stream(websocket: WebSocket):
                     break
     except WebSocketDisconnect:
         pass
+
+
+@app.websocket("/ws/agent")
+async def websocket_agent_endpoint(websocket: WebSocket):
+    """
+    Dedicated bidirectional control channel for Laptop Agent.
+    Enforces authentication handshake, tracks device registration in FleetManager,
+    maintains heartbeats, and routes workstation tool execution and receipts.
+    """
+    await websocket.accept()
+    sess_id = str(uuid.uuid4())
+    ws_mgr: WebSocketConnectionManager = getattr(websocket.app.state, "ws_manager", ws_manager)
+    fleet_mgr = getattr(websocket.app.state, "fleet_manager", None)
+    device_id = "unknown_laptop"
+
+    try:
+        # 1. Require registration handshake as first message within timeout
+        raw_msg = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        try:
+            reg_data = json.loads(raw_msg)
+        except json.JSONDecodeError:
+            await websocket.send_json({"type": "error", "error": "BAD_REQUEST", "message": "First message must be valid JSON"})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        if reg_data.get("type") not in ("register", "connect"):
+            await websocket.send_json({"type": "error", "error": "BAD_REQUEST", "message": "First message must be registration handshake"})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        device_id = reg_data.get("device") or reg_data.get("device_id") or "laptop1"
+        token = reg_data.get("token") or reg_data.get("auth_token") or ""
+
+        # Check token from message, query params, or headers
+        query_token = websocket.query_params.get("token") or websocket.headers.get("x-api-key")
+        active_token = token or query_token or ""
+
+        if not auth_manager.validate_token(active_token, device_id=device_id):
+            logger.warning(f"Rejecting unauthorized laptop agent connection for device '{device_id}'")
+            await websocket.send_json({"type": "error", "error": "UNAUTHORIZED", "message": "Invalid authentication token"})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        # 2. Register in FleetManager & WebSocketConnectionManager
+        capabilities = reg_data.get("capabilities", [])
+        if fleet_mgr:
+            fleet_mgr.register_device(
+                speaker_id=device_id,
+                name=device_id,
+                room="workstation",
+                device_type="laptop",
+                capabilities=capabilities,
+                auth_token=active_token,
+                metadata={"client_ip": websocket.client.host if websocket.client else "unknown"}
+            )
+
+        await ws_mgr.connect(websocket, device_id=device_id, session_id=sess_id)
+
+        # 3. Send registration ACK to laptop agent
+        await websocket.send_json({
+            "type": "registered",
+            "status": "ok",
+            "device": device_id,
+            "session_id": sess_id,
+            "server_time": time.time()
+        })
+        logger.info(f"Laptop agent '{device_id}' authenticated and registered on /ws/agent (session: {sess_id})")
+
+        # 4. Message dispatch and heartbeat loop
+        while True:
+            msg_text = await websocket.receive_text()
+            try:
+                payload = json.loads(msg_text)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "error": "INVALID_JSON"})
+                continue
+
+            msg_type = payload.get("type")
+            if msg_type == "ping":
+                if fleet_mgr:
+                    try:
+                        fleet_mgr.record_heartbeat(device_id)
+                    except Exception:
+                        pass
+                await websocket.send_json({"type": "pong", "timestamp": time.time()})
+
+            elif msg_type in ("tool_result", "command_ack"):
+                cmd_id = payload.get("id") or payload.get("command_id")
+                result_payload = payload.get("result", {}) if msg_type == "tool_result" else payload.get("output", {})
+                is_success = result_payload.get("success", True) if isinstance(result_payload, dict) else True
+                err_msg = payload.get("error") or (result_payload.get("error") if isinstance(result_payload, dict) else None)
+                ack = InboundCommandAckPayload(
+                    command_id=cmd_id,
+                    status="OK" if is_success and not err_msg else "ERROR",
+                    error=err_msg,
+                    output=result_payload if isinstance(result_payload, dict) else {"raw": result_payload}
+                )
+                if fleet_mgr:
+                    fleet_mgr.handle_command_ack(ack)
+
+    except asyncio.TimeoutError:
+        logger.warning(f"Registration timeout for /ws/agent connection from {getattr(websocket, 'client', 'unknown')}")
+        try:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        except Exception:
+            pass
+    except WebSocketDisconnect:
+        logger.info(f"Laptop agent '{device_id}' disconnected from /ws/agent")
+    except Exception as exc:
+        logger.error(f"Error on /ws/agent for '{device_id}': {exc}", exc_info=True)
+    finally:
+        await ws_mgr.disconnect(sess_id)
+        if fleet_mgr and device_id:
+            try:
+                device = fleet_mgr.get_speaker(device_id)
+                if device:
+                    device.status = "offline"
+            except Exception:
+                pass
+
 
 @app.get("/health/live")
 async def health_live():

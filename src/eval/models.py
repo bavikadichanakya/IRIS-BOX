@@ -67,6 +67,8 @@ class TaskExecutionResult(BaseModel):
     params_matched: bool = False
     security_adherent: bool = True
     ground_truth_tokens_matched: bool = True
+    action_success: bool = False
+    model_decision_passed: bool = False
     latency_ms: float = 0.0
     passed: bool = False
     status: str = "COMPLETED"
@@ -85,6 +87,8 @@ class BenchmarkReport(BaseModel):
     tool_accuracy_pct: float
     param_fidelity_pct: float
     security_adherence_pct: float
+    action_success_pct: float = 0.0
+    model_decision_pct: float = 0.0
     avg_latency_ms: float
     median_latency_ms: float = 0.0
     mean_latency_sec: float = 0.0

@@ -9,7 +9,7 @@ CONFIG_FILE_PATH = Path(__file__).resolve().parent / "config.json"
 class AgentConfig(BaseModel):
     device_name: str = Field(default="laptop1", description="Unique device ID (e.g. laptop1, laptop2)")
     hub_url: str = Field(default="ws://127.0.0.1:8000/ws/agent", description="Phone A WebSocket server URL")
-    auth_token: str = Field(default="iris_secret_token", description="Shared secret for pairing")
+    auth_token: str = Field(default="", description="Authentication pairing token")
     heartbeat_seconds: float = Field(default=15.0, description="Ping interval to maintain connection")
     reconnect_interval_seconds: float = Field(default=3.0, description="Wait time before reconnecting")
     browser_user_data_dir: str = Field(
