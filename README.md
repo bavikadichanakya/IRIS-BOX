@@ -1,110 +1,181 @@
-# IRIS-BOX: Offline, Security-First AI Computer Operator
+# IRIS-BOX: Offline, Voice-Controlled AI Computer Operator & Smart Workstation Assistant
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.12](https://img.shields.io/badge/Python-3.12-green.svg)](https://www.python.org/)
 [![Offline: Air-Gapped](https://img.shields.io/badge/Air--Gap-Enforced-success.svg)](dist/airgap_manifest.json)
-[![Production Model: heretic-iris:latest](https://img.shields.io/badge/Production%20Model-heretic--iris%3Alatest-blue.svg)](models/Modelfile.heretic_iris)
-[![Promotion Gate: Passed](https://img.shields.io/badge/Promotion%20Gate-100%25%20(90.2%25%20Speedup)-brightgreen.svg)](data/eval_reports/comparison_heretic_vs_baseline.json)
+[![Primary Operator Model: IRIS-Qwen3-4B-Operator](https://img.shields.io/badge/Primary%20Model-IRIS--Qwen3--4B--Operator-blueviolet.svg)](models/Modelfile.iris_qwen3_4b_operator)
+[![Validation Benchmark Gate: 100%](https://img.shields.io/badge/Validation%20Gate-100%25%20Passed-brightgreen.svg)](scripts/train_iris_uncensored_master.ipynb)
 [![Socket Guard: Zero-Leak](https://img.shields.io/badge/Socket%20Guard-Loopback%20Only-blueviolet.svg)](src/security/airgap.py)
 
-**IRIS-BOX** is an autonomous, privacy-first **Personal AI Computer Operator** engineered for local edge devices and developer workstations. It operates **100% offline** with strict socket-level air-gap enforcement, eliminating cloud dependencies for reasoning, code diagnosis, window management, desktop telemetry, speech recognition, and neural voice synthesis.
+**IRIS-BOX** is an autonomous, privacy-first, Alexa-style **Voice-Controlled AI Computer Operator** built for multi-device workstation automation, local edge hardware, and developer productivity. It operates **100% offline** with zero cloud dependencies for reasoning, application manipulation, desktop telemetry, speech recognition, and neural voice synthesis.
 
-Unlike cloud-dependent assistants that send screen captures and codebases to remote servers, IRIS-BOX executes bounded local actions behind a **cryptographic capability approval gate**, featuring content-hashed execution plans, single-use per-step tickets, surgical unified diff previews, and atomic rollback checkpoints.
+Unlike conventional cloud assistants that send screen captures, audio logs, and sensitive project code to remote cloud vendors, IRIS-BOX executes bounded local actions across one or more laptops (`laptop1`, `laptop2`) using **Universal Computer Operator Primitives** behind a **cryptographic capability approval gate**.
 
 ---
 
-## 🏛️ System Architecture
+## 🏛️ Physical Hardware & Multi-Device Architecture
+
+IRIS-BOX is physically realized as a dual-phone smart hub paired with one or more workstation laptops:
 
 ```
-                    ┌───────────────────────────────────────────────────────────┐
-                    │                      USER INTERACTION                     │
-                    │   • Hands-Free Voice (openWakeWord + Faster-Whisper)       │
-                    │   • Real-Time Binary WebSocket Protocol (/ws/voice-stream) │
-                    │   • Zero-CDN Offline Progressive Web App (PWA) Companion   │
-                    └─────────────────────────────┬─────────────────────────────┘
-                                                  │
-                                                  ▼
-                    ┌───────────────────────────────────────────────────────────┐
-                    │              ENVIRONMENT INTELLIGENCE LAYER               │
-                    │   • ActiveEditorDetector: Scans foreground IDE / Terminal  │
-                    │   • WorkspaceResolver: Fuzzy workspace directory matching │
-                    │   • DesktopEnvironment: psutil CPU/RAM/Disk/Battery metrics│
-                    │   • Service Watchdogs: Docker, Ollama, WSL2, DB daemons   │
-                    │   • WindowManager: Native User32 focus bypass & WinApp DB  │
-                    └─────────────────────────────┬─────────────────────────────┘
-                                                  │
-                                                  ▼
-                    ┌───────────────────────────────────────────────────────────┐
-                    │               TASK PLANNER & ReAct ENGINE                 │
-                    │   • ReAct Multi-Step Reasoning Loop                       │
-                    │   • Read-Only Test Runner (pytest / unittest / npm test)  │
-                    │   • DiffPatcher: Surgical Unified Diff Generation         │
-                    │   • ExecutionPlan: Canonical JSON + SHA-256 Content Hash  │
-                    └─────────────────────────────┬─────────────────────────────┘
-                                                  │
-                                                  ▼
-                    ┌───────────────────────────────────────────────────────────┐
-                    │           CRYPTOGRAPHIC POLICY & APPROVAL GATE            │
-                    │   • Permission Taxonomy: PUBLIC | PROTECTED | SENSITIVE   │
-                    │   • HMAC-SHA256 Plan Approval Token (bound to plan digest)│
-                    │   • Single-Use StepTickets (bound to canonical params)    │
-                    │   • Socket Air-Gap Guard: Injects Loopback-Only Transport │
-                    └─────────────────────────────┬─────────────────────────────┘
-                                                  │
-                                                  ▼
-                    ┌───────────────────────────────────────────────────────────┐
-                    │                  BOUNDED COMPUTER TOOLS                   │
-                    │   • ProjectOperatorTool: diagnosis, diff, patch, rollback │
-                    │   • DesktopIntelligenceTool: top processes, ports, metrics│
-                    │   • WindowAutomationTool: launch, focus, state, close     │
-                    │   • SystemCommandTool: sandboxed local subprocesses       │
-                    │   • BrowserTool: Playwright headless navigation           │
-                    │   • HomeAssistantTool: local smart home REST client       │
-                    └─────────────────────────────┬─────────────────────────────┘
-                                                  │
-                                                  ▼
-                    ┌───────────────────────────────────────────────────────────┐
-                    │              OUTCOME VERIFICATION & RECOVERY              │
-                    │   • Subprocess Exit Code Verification (returncode == 0)   │
-                    │   • Atomic Rollback Recovery (.iris_checkpoints/ & Git)   │
-                    │   • Spoken Audio Feedback: Local Piper ONNX Voice Model   │
-                    └───────────────────────────────────────────────────────────┘
+┌─────────────────────────────────┐                 ┌─────────────────────────────────┐
+│   Phone B: Senses & Voice I/O   │                 │     Phone A: The System Brain   │
+│  • Array Microphones & Speaker  │ ──Local Stream─►│  • IRIS-Qwen3-4B-Operator GGUF  │
+│  • openWakeWord Detection       │                 │  • Termux llama.cpp / llama-srv │
+│  • Faster-Whisper Speech-to-Text│ ◄─Audio Feedback│  • Central WebSocket Action Hub │
+│  • Local Piper Neural TTS Voice │  (speech_reply) │  • Multi-Device Action Router   │
+└─────────────────────────────────┘                 └────────────────┬────────────────┘
+                                                                     │
+                                             Local Wi-Fi WebSocket Protocol
+                                             {"device": "laptop1"|"laptop2", ...}
+                                                                     │
+                                      ┌──────────────────────────────┴──────────────────────────────┐
+                                      ▼                                                             ▼
+                       ┌──────────────────────────────┐                              ┌──────────────────────────────┐
+                       │     Workstation: Laptop 1    │                              │     Workstation: Laptop 2    │
+                       │  • Win32 OpenDesktopW Focus  │                              │  • Win32 OpenDesktopW Focus  │
+                       │  • Persistent Chromium State │                              │  • Persistent Chromium State │
+                       │  • Universal Primitives      │                              │  • Universal Primitives      │
+                       │  • Native Media & Hotkey (f) │                              │  • Native Media & Hotkey (f) │
+                       └──────────────────────────────┘                              └──────────────────────────────┘
+```
+
+### Component Roles:
+1. **Phone A (The Brain)**:
+   - Houses the local LLM runtime via `llama.cpp` / `llama-server` on Android Termux.
+   - Executes the fine-tuned, quantized **`IRIS-Qwen3-4B-Operator.Q4_K_M.gguf`** (~2.38 GB), consuming minimal RAM while delivering ultra-low-latency structured tool generation.
+   - Runs the central WebSocket routing hub that coordinates actions between voice I/O and target laptops.
+2. **Phone B (The Senses & Spoken Voice)**:
+   - Provides physical microphone listening and acoustic speaker playback in the room.
+   - Runs `openWakeWord` acoustic detection ("Hey Iris"), `Faster-Whisper` streaming STT, and synthesizes spoken natural voice feedback (`speech_reply`) via local `Piper` neural TTS or `edge-tts`.
+3. **Laptop Agents (Workstation Actuators)**:
+   - Python daemon (`laptop_agent`) running in the background on each workstation (`laptop1`, `laptop2`).
+   - Maintains a resilient WebSocket connection with Phone A.
+   - Executes arbitrary user tasks via deep Win32 API calls (`OpenDesktopW`, `EnumDesktopWindows`, `SetForegroundWindow`), clipboard Unicode injection (`Ctrl+V`), and persistent Playwright browser automation.
+
+---
+
+## 🧠 The `IRIS-Qwen3-4B-Operator` Model
+
+The core intelligence powering IRIS-BOX is a custom fine-tuned model created specifically for universal computer control and spoken interaction:
+
+- **Base Architecture**: `Qwen/Qwen3-4B-Instruct-2507` (4 Billion parameters).
+- **Quantization**: `Q4_K_M` (~2.38 GB GGUF), fitting comfortably within Phone A's Termux memory budget (~3.2 GB peak RAM usage).
+- **Training Pipeline**: 4-bit QLoRA with `unsloth` and TRL `SFTTrainer` trained across 220+ high-fidelity multi-turn operator scenarios covering:
+  - Multi-turn YouTube search, scroll, ordinal video selection, ad-skipping, and native player fullscreen (`hotkey: "f"`).
+  - Claude and ChatGPT web/desktop automation (new conversation, clipboard typing, prompt submission).
+  - Multi-window desktop context switching and background window restoration.
+  - Cross-service media playback (Spotify, Apple Music, YouTube).
+  - Compound action pipelines (`actions: [...]`).
+  - Device routing targeting specific workstations (`laptop1`, `laptop2`).
+- **Validation Benchmark Gate**: Tested against 8 real-world complex operator scenarios, achieving a **100% pass rate** for valid JSON syntax, correct tool argument extraction, and natural voice speech replies.
+- **Colab Training Notebook**: Fully reproducible standalone 5-stage fine-tuning pipeline available in [`scripts/train_iris_uncensored_master.ipynb`](scripts/train_iris_uncensored_master.ipynb) and [`scripts/generate_master_colab.py`](scripts/generate_master_colab.py).
+
+---
+
+## 🛠️ Universal Computer Operator Primitives
+
+Rather than maintaining fragile, site-specific automation scripts, IRIS-BOX operates through an atomic set of **Universal Operator Primitives**:
+
+| Primitive Tool | Key Arguments | Purpose & Example |
+| :--- | :--- | :--- |
+| `open_or_switch` | `target` (app name or URL) | Brings existing window to front or launches app/URL if not open. *(e.g. `{"tool": "open_or_switch", "args": {"target": "claude"}}`)* |
+| `new_chat` | (none) | Clicks new chat/tab button (e.g. Claude `[aria-label="New chat"]`, ChatGPT, or `Ctrl+N`). |
+| `type_and_send` | `text`, `submit` (bool) | Pastes Unicode text via system clipboard (`Ctrl+V`) into active input/textarea and submits. |
+| `click_label` | `label` (text, aria-label, index) | Clicks element matching visible text, ordinal position (`video_1`, `video_2`), or buttons like `"Skip Ad"`. |
+| `hotkey` | `combo` (`f`, `space`, `shift+n`) | Executes keyboard shortcuts. **Uses native YouTube player `'f'` for true player full screen** (never browser zoom). |
+| `scroll` | `direction` (`up` / `down`) | Smoothly scrolls the active document or web page viewport. |
+| `get_active_context`| (none) | Queries foreground window title, process name, and active browser tab. |
+| `volume` | `action` (`up`, `down`, `mute`), `steps` | Controls hardware sound output volume. |
+| `search_media` | `service` (`spotify`, `apple_music`, `youtube`), `query` | Cross-service audio and video search dispatcher. |
+
+### Compound Action Pipeline Example
+The model can emit single tool calls or an array of sequential compound actions:
+```json
+{
+  "device": "laptop1",
+  "actions": [
+    {"tool": "open_or_switch", "args": {"target": "youtube"}},
+    {"tool": "type_and_send", "args": {"text": "soothing lofi live", "submit": true}},
+    {"tool": "click_label", "args": {"label": "video_1"}},
+    {"tool": "hotkey", "args": {"combo": "f"}}
+  ],
+  "speech_reply": "Playing soothing lofi on YouTube in full screen on Laptop 1."
+}
 ```
 
 ---
 
-## 🚀 Core Operator Capabilities
+## 🚀 Laptop Agent Setup & Execution
 
-### 1. Hands-Free AI Project Operator
-*Self-healing developer workflow for unattended diagnostics, code editing, and test verification.*
+### Prerequisites
+- Windows 10/11
+- Python 3.12+ (or [uv](https://github.com/astral-sh/uv))
+- Playwright Chromium installed (`python -m playwright install chromium`)
 
-- **Active Editor Detection** (`src/operator/resolver.py`): Automatically detects whether you are working in **VS Code**, **Cursor**, **PyCharm**, or **Windows Terminal** using native Windows API calls (`GetForegroundWindow`, `GetWindowTextW`, `parse_window_title`).
-- **Fuzzy Workspace Resolution** (`src/operator/resolver.py`): Matches spoken project aliases (e.g. *"check why payment tests fail"*) against active IDE paths, recent git checkouts, and known repository roots without requiring absolute directory paths (`WorkspaceResolver`).
-- **Read-Only Diagnostic Subshells** (`src/operator/task_runner.py`): Executes sandboxed test runs (`pytest`, `unittest`, `npm test`) via `SystemCommandSkill` to capture stdout, stderr, stack traces, and failing assertion boundaries in a safe, read-only mode (`OperatorTaskRunner.diagnose_failure`).
-- **Surgical Unified Diff Previews** (`src/operator/task_runner.py`): Generates human-auditable unified diffs (`difflib.unified_diff`) for all proposed patches. No silent or destructive file rewrites.
-- **Exit Code Verification** (`src/operator/task_runner.py`): Validates fixes by re-executing test suites and asserting zero regressions (`returncode == 0`).
-- **1-Click Atomic Rollback** (`src/operator/workspace.py`): Automatically creates atomic snapshots in `.iris_checkpoints/<timestamp>/` and git commits, enabling instantaneous rollbacks (`ProjectWorkspace`).
+### 1. Launching the Laptop Agent
+On each workstation:
+```powershell
+# Clone or navigate to the repository
+cd A:\IRISBOX\iris-backend
 
-### 2. Desktop Environment & Process Intelligence
-*Real-time system observability and developer daemon watchdogs.*
+# Install dependencies
+uv sync
+# Or with standard pip:
+pip install -e .
 
-- **Hardware Telemetry** (`src/operator/desktop.py`): Real-time sampling of CPU utilization, RAM consumption, disk partition headroom, and battery/power states via `psutil`.
-- **Top Consumer Profiler**: Identifies processes consuming excess CPU or RAM (`get_top_processes(sort_by="memory", limit=5)`).
-- **Developer Daemon Watchdog**: Actively inspects health, PIDs, and response states of local developer services: **Docker**, **Ollama**, **WSL2**, **PostgreSQL**, and **Redis**.
-- **Local Port Mapping**: Audits active TCP listening sockets (`get_listening_ports()`), correlating listening ports with their owning process names and PIDs.
+# Launch the Laptop Agent
+python run_agent.py
+# Or via module:
+python -m laptop_agent.cli
+```
 
-### 3. Multi-Window & Application Automation
-*Deep Windows OS interop for window management and application launching.*
+### 2. Standalone Testing (Without Phone A)
+You can verify all desktop, browser, and media actions immediately using the built-in mock hub or CLI:
 
-- **Start Menu & Registry Discovery** (`src/operator/app_launcher.py`): Scans Start Menu directories (`CSIDL_COMMON_PROGRAMS`, `CSIDL_PROGRAMS`) and Windows Registry `App Paths` (`HKLM` & `HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths`) to launch applications by executable name or friendly alias.
-- **Detached Execution**: Spawns processes in decoupled sessions (`DETACHED_PROCESS` / `CREATE_NEW_PROCESS_GROUP`) ensuring the operator server remains non-blocking.
-- **Windows Focus-Stealing Bypass** (`src/operator/window_manager.py`): Overcomes native Windows OS focus lock prevention via Win32 thread attachment (`AttachThreadInput`) or simulated `Alt` key event pulses (`keybd_event`).
-- **Window State Control**: Supports window minimize (`SW_MINIMIZE = 6`), maximize (`SW_MAXIMIZE = 3`), restore (`SW_RESTORE = 9`), and graceful termination (`WM_CLOSE = 0x0010`).
-- **OS Blacklist Guard**: Hardened protection mechanism that blocks accidental or malicious termination of critical system processes (`explorer.exe`, `csrss.exe`, `lsass.exe`, `svchost.exe`, `smss.exe`, `wininit.exe`).
+- **Interactive Menu**: Run `python -m laptop_agent.cli` and pick any automation scenario.
+- **Single Command**:
+  ```powershell
+  python -m laptop_agent.cli --cmd '{"tool": "open_or_switch", "args": {"target": "youtube"}}'
+  ```
+- **Simulated WebSocket Hub (Phone A Simulator)**:
+  ```powershell
+  # Terminal 1: Run mock hub
+  python -m laptop_agent.mock_hub
+
+  # Terminal 2: Run laptop client
+  python -m laptop_agent.client
+  ```
+  Type commands into Terminal 1 to watch your laptop execute them in real time.
 
 ---
 
-## 🔒 Security & Trust Boundary Architecture
+## 📱 Phone A (Termux) & Phone B Deployment
+
+### Phone A Setup (Brain Runtime)
+1. Install **Termux** on Phone A.
+2. Install `llama.cpp`:
+   ```bash
+   pkg update && pkg install git cmake clang
+   git clone https://github.com/ggerganov/llama.cpp
+   cd llama.cpp && cmake -B build && cmake --build build --config Release
+   ```
+3. Transfer or download `IRIS-Qwen3-4B-Operator.Q4_K_M.gguf` onto Phone A.
+4. Start the local inference server:
+   ```bash
+   ./build/bin/llama-server -m /path/to/IRIS-Qwen3-4B-Operator.Q4_K_M.gguf -c 4096 --host 0.0.0.0 --port 8080
+   ```
+
+### Ollama Desktop Alternative
+To run the model on a local workstation using Ollama:
+```powershell
+ollama create iris-qwen3-4b-operator -f models/Modelfile.iris_qwen3_4b_operator
+ollama run iris-qwen3-4b-operator
+```
+
+---
+
+## 🔒 Security & Cryptographic Trust Architecture
 
 IRIS-BOX implements defense-in-depth across the entire execution lifecycle:
 
@@ -119,97 +190,7 @@ IRIS-BOX implements defense-in-depth across the entire execution lifecycle:
 
 ---
 
-## 📊 Empirical Benchmark & Model Promotion Gate
-
-IRIS-BOX benchmarks every model checkpoint across **6 core tool domains** using deterministic replay evaluation. In the October 2026 promotion gate evaluation, candidate checkpoint **`heretic-iris:latest`** (uncensored Heretic persona, optimized low-latency hyperparameters) was evaluated against the verified **`qwen2.5:7b-instruct`** baseline.
-
-Detailed reports are archived in:
-- Baseline Report: [`data/eval_reports/baseline_qwen2.5_7b.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/baseline_qwen2.5_7b.json)
-- Candidate Report: [`data/eval_reports/candidate_heretic_iris.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/candidate_heretic_iris.json)
-- Comparison Gate Report: [`data/eval_reports/comparison_heretic_vs_baseline.json`](file:///c:/Users/bavik/iris-backend/data/eval_reports/comparison_heretic_vs_baseline.json)
-
-### Comparative Benchmark Matrix (Candidate vs Baseline)
-
-| Evaluation Metric | Baseline (`qwen2.5:7b-instruct`) | Promoted Model (`heretic-iris:latest`) | Delta | Promotion Gate Criteria |
-| :--- | :---: | :---: | :---: | :---: |
-| **Tool Selection Accuracy** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | Must be == 100.0% (`PASSED`) |
-| **Parameter Extraction Fidelity** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | Must be == 100.0% (`PASSED`) |
-| **Security Adherence** | 100.0% (6/6) | **100.0% (6/6)** | +0.0% | Must be == 100.0% (`PASSED`) |
-| **Regressions** | 0 | **0** | 0 | Must have 0 regressions (`PASSED`) |
-| **Mean Latency** | 492.20s | **48.28s** | **-443.92s** | **90.2% Latency Speedup** |
-| **Overall Gate Verdict** | Baseline | **PROMOTED** | — | **`PROMOTE_CANDIDATE`** |
-
-### 6-Domain Evaluation Breakdown
-
-| Evaluation Domain | Case ID | Tool Called | Parameter Fidelity | Security Adherence | Status |
-| :--- | :--- | :--- | :---: | :---: | :--- |
-| **Smart Home** | `smart_home_lights` | `HomeAssistantTool` | 100.0% | 100.0% | `PASSED` |
-| **System Terminal** | `system_terminal_echo` | `SystemCommandTool` | 100.0% | 100.0% | `PLAN_PREVIEW_REQUIRED` |
-| **Web Browser** | `browser_navigation` | `BrowserTool` | 100.0% | 100.0% | `PASSED` |
-| **Project Operator** | `operator_workspace_diagnosis` | `ProjectOperatorTool` | 100.0% | 100.0% | `CONFIRMATION_REQUIRED` |
-| **Desktop Telemetry** | `desktop_telemetry_top_ram` | `DesktopIntelligenceTool` | 100.0% | 100.0% | `PASSED` |
-| **Window Automation** | `window_focus_browser` | `WindowAutomationTool` | 100.0% | 100.0% | `PASSED` |
-
-### Automatic Rollback & Fallback Mechanism
-`heretic-iris:latest` serves as the primary production model. If deployed on a fresh workstation before `heretic-iris:latest` is registered in Ollama, `IRISOrchestrator` automatically detects the missing model tag and performs an immediate, zero-downtime rollback to `qwen2.5:7b-instruct` (`FALLBACK_MODEL`).
-
----
-
-## 📦 Air-Gapped Installation & Quickstart
-
-### Prerequisites
-- Windows 10/11 (64-bit)
-- Python 3.12 (or [uv](https://github.com/astral-sh/uv))
-- Local Ollama instance serving `qwen2.5:7b-instruct` (or `heretic-iris:latest`)
-- Node.js 18+ (optional, for MCP Gateway in `mcp/`)
-
-### Setup Instructions for Collaborators
-
-1. **Configure Environment Variables:**
-   ```powershell
-   Copy-Item .env.example .env
-   # Or on bash:
-   cp .env.example .env
-   ```
-
-2. **Run the Automated Air-Gap Installer:**
-   ```powershell
-   # Run the automated 5-step offline installer
-   powershell -ExecutionPolicy Bypass -File scripts/setup_airgap_bundle.ps1
-   ```
-
-   Alternatively, if using `uv` with online package index:
-   ```powershell
-   uv sync
-   ```
-
-3. **(Optional) Launch Model Context Protocol (MCP) Gateway:**
-   ```powershell
-   cd mcp
-   npm install
-   npm start
-   ```
-
----
-
-## 🎬 Live End-to-End Operator Showcase
-
-Experience the full autonomous operator loop in action by running the live 5-act demonstration script:
-
-```powershell
-uv run --python 3.12 python scripts/showcase_operator.py
-```
-
-### What the Showcase Demonstrates:
-1. **Act 1: Desktop Telemetry & Daemons**: Samples CPU/RAM metrics and checks Docker & Ollama daemons.
-2. **Act 2: Hands-Free Project Diagnosis**: Detects an intentional defect in `payment-service` and runs read-only pytest diagnostics.
-3. **Act 3: Staged Plan & Unified Diff**: Synthesizes a 4-step cryptographic `ExecutionPlan` with a unified diff preview.
-4. **Act 4: Cryptographic Token Approval**: Issues an HMAC-SHA256 approval token bound to the plan content hash.
-5. **Act 5: Verified Execution & Zero-Regression**: Applies the patch, re-runs tests to assert `returncode == 0`, and announces the result via local Piper voice synthesis.
-
----
-
-## 🧪 Verification & Test Suite Execution
+## 🧪 Verification & Benchmark Suite
 
 Run the comprehensive test matrix to verify air-gap enforcement, operator capabilities, and security boundaries:
 
@@ -238,23 +219,29 @@ uv run --python 3.12 pytest tests/test_task_eval.py -v
 ## 📁 Repository Directory Structure
 
 ```
-iris-backend/
-├── dist/
-│   ├── wheels/                          # Offline binary wheel package cache (46 wheels)
-│   ├── requirements-airgap.txt          # Locked requirements without remote index
-│   └── airgap_manifest.json             # SHA256 integrity manifest for all offline assets
-├── docs/
-│   ├── architecture_and_verification_report.md # Comprehensive engineering & audit report
-│   └── heretic_model_guide.md           # Local LLM fine-tuning & quantization guide
-├── mcp/                                 # Model Context Protocol (MCP) HTTP/SSE Gateway & Bridge
+IRIS-BOX/
+├── laptop_agent/                        # Workstation edge client & universal primitives
+│   ├── tools/
+│   │   ├── universal_operator.py        # Universal Operator Primitives (open, type, click, hotkey, scroll)
+│   │   ├── app_control.py               # Win32 OpenDesktopW window focus & clipboard injection
+│   │   ├── browser_control.py           # Persistent Chromium profile Playwright automation
+│   │   ├── media_control.py             # YouTube ad-skipping, search, native player 'f' fullscreen
+│   │   └── system_control.py            # Hardware volume, CPU/RAM, and sandboxed execution
+│   ├── client.py                        # Resilient WebSocket client connecting to Phone A Hub
+│   ├── dispatcher.py                    # Multi-action dispatcher handling single and compound actions
+│   ├── config.py                        # Device identifier (laptop1, laptop2) and hub configs
+│   ├── cli.py                           # Interactive standalone test CLI
+│   └── mock_hub.py                      # Standalone Phone A hub simulator
 ├── models/
+│   ├── Modelfile.iris_qwen3_4b_operator # Ollama / llama.cpp definition for Qwen3-4B Operator
+│   ├── Modelfile.heretic_iris           # Ollama definition for Heretic uncensored persona
 │   ├── piper/                           # Piper ONNX neural TTS voice models
 │   ├── whisper/                         # Faster-Whisper base.en model & tokenizer
-│   ├── wakeword/                        # openWakeWord ONNX acoustic model
-│   └── ollama/                          # Ollama manifest & Modelfile references
+│   └── wakeword/                        # openWakeWord ONNX acoustic model
 ├── scripts/
-│   ├── package_airgap_bundle.py         # Wheel collector & air-gap manifest bundler
-│   ├── setup_airgap_bundle.ps1          # Automated Windows offline installer script
+│   ├── train_iris_uncensored_master.ipynb # 5-Stage Google Colab fine-tuning & GGUF quantization
+│   ├── train_iris_uncensored_master.py  # Standalone master training pipeline
+│   ├── generate_master_colab.py         # Automated Colab notebook generator
 │   ├── showcase_operator.py             # 5-Act Live AI Computer Operator showcase
 │   └── run_baseline_benchmark.py        # 6-domain deterministic benchmark runner
 ├── src/
@@ -264,6 +251,7 @@ iris-backend/
 │   ├── server/                          # FastAPI app, static assets, PWA service worker
 │   ├── storage/                         # SQLite durable audit logs and conversation state
 │   └── tools/                           # ToolManager and bounded computer tool implementations
+├── run_agent.py                         # One-click launcher for the Laptop Agent
 └── tests/                               # Comprehensive unit, integration, and E2E test suites
 ```
 

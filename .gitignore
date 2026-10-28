@@ -54,11 +54,18 @@ test_output.wav
 e2e_response.wav
 
 # Model weights & Airgap Wheels (Binary assets)
+*.gguf
 models/*.gguf
+*.safetensors
+*.bin
 models/whisper/
 models/piper/
 models/wakeword/
 dist/wheels/
+offload/
+iris_operator_lora/
+iris_merged_16bit/
+llama.cpp/
 
 # Evaluation runtime data & local vector store caches
 data/eval_reports/benchmark_*.json

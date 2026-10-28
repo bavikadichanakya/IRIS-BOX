@@ -1,0 +1,125 @@
+{
+  "step1_open_youtube": {
+    "device": "laptop1",
+    "tool": "open_youtube"
+  },
+  "step2_search_soothing_songs": {
+    "device": "laptop1",
+    "tool": "search_youtube",
+    "args": {
+      "query": "soothing songs"
+    }
+  },
+  "step3_scroll_down": {
+    "device": "laptop1",
+    "tool": "scroll",
+    "args": {
+      "direction": "down",
+      "amount": 600
+    }
+  },
+  "step3_scroll_up": {
+    "device": "laptop1",
+    "tool": "scroll",
+    "args": {
+      "direction": "up",
+      "amount": 600
+    }
+  },
+  "step4_play_short": {
+    "device": "laptop1",
+    "tool": "play_short",
+    "args": {
+      "nth": 1
+    }
+  },
+  "step4_play_video_2nd": {
+    "device": "laptop1",
+    "tool": "play_video",
+    "args": {
+      "nth": 2
+    }
+  },
+  "step5_skip_ad": {
+    "device": "laptop1",
+    "tool": "skip_ad"
+  },
+  "step6_native_fullscreen": {
+    "device": "laptop1",
+    "tool": "fullscreen"
+  },
+  "step7_theater_mode": {
+    "device": "laptop1",
+    "tool": "theater_mode"
+  },
+  "step8_play_pause": {
+    "device": "laptop1",
+    "tool": "play_pause"
+  },
+  "step9_next_video": {
+    "device": "laptop1",
+    "tool": "next_track"
+  },
+  "all_in_one_youtube_music": {
+    "device": "laptop1",
+    "tool": "play_music",
+    "args": {
+      "service": "youtube",
+      "query": "soothing lofi beats",
+      "nth": 1,
+      "fullscreen": true
+    }
+  },
+  "play_on_spotify": {
+    "device": "laptop1",
+    "tool": "search_media",
+    "args": {
+      "service": "spotify",
+      "query": "peaceful piano"
+    }
+  },
+  "play_on_apple_music": {
+    "device": "laptop1",
+    "tool": "search_media",
+    "args": {
+      "service": "apple_music",
+      "query": "acoustic chill"
+    }
+  },
+  "claude_send_prompt": {
+    "device": "laptop1",
+    "tool": "claude_send",
+    "args": {
+      "prompt": "what is the population of earth"
+    }
+  },
+  "open_notepad_and_type": {
+    "actions": [
+      {
+        "tool": "open_app",
+        "args": {
+          "name": "notepad"
+        }
+      },
+      {
+        "tool": "type_text",
+        "args": {
+          "text": "Hello from IRIS Laptop Agent!\nTesting multi-turn commands.\n",
+          "press_enter": true
+        }
+      }
+    ]
+  },
+  "adjust_volume_up": {
+    "device": "laptop1",
+    "tool": "volume",
+    "args": {
+      "action": "up",
+      "steps": 4
+    }
+  },
+  "system_telemetry": {
+    "device": "laptop1",
+    "tool": "system_status"
+  }
+}
